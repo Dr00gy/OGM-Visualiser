@@ -14,7 +14,7 @@ After cloning the repo, just run `docker-compose up --build` !
 
 ## Testing
 ### Manual
-.xmap files can be uploaded in the app by picking from PC or doing a drag and drop.
+`.xmap` files can be uploaded in the app by picking from PC or doing a drag and drop.
 
 ### Cargo test and Vitest
 When testing the backend, run `cargo test` !
