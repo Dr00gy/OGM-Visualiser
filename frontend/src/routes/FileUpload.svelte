@@ -2,13 +2,7 @@
   import { createEventDispatcher } from 'svelte';
   const dispatch = createEventDispatcher();
   const REFINEFINAL_NAME = 'exp_refineFinal1.xmap';
-
-  function isWantedXmap(name: string): boolean {
-    if (!name.endsWith('.xmap')) return false;
-    if (name === REFINEFINAL_NAME) return true;
-    const stem = name.slice(0, -'.xmap'.length);
-    return !(stem.endsWith('_r') || stem.endsWith('_q'));
-  }
+  const CONTIG_PATH = ['assembly', 'output', 'contigs', 'exp_refineFinal1', 'alignmol', 'merge'];
 
   interface GenomeZone {
     contigFiles: File[];
@@ -35,41 +29,27 @@
     zones = zones.filter((_, i) => i !== index);
   }
 
-  function getDirName(files: File[]): string {
-    if (files.length === 0) return '';
-    const rel = (files[0] as any).webkitRelativePath as string | undefined;
-    if (rel) return rel.split('/')[0];
-    return `${files.length} file(s)`;
+  async function walkDirectory(
+    dir: FileSystemDirectoryEntry,
+    segments: string[]
+  ): Promise<FileSystemDirectoryEntry | null> {
+    if (segments.length === 0) return dir;
+    const [first, ...rest] = segments;
+    return new Promise((resolve) => {
+      dir.createReader().readEntries((entries) => {
+        const match = entries.find(
+          (e) => e.isDirectory && e.name === first
+        ) as FileSystemDirectoryEntry | undefined;
+        if (match) {
+          walkDirectory(match, rest).then(resolve);
+        } else {
+          resolve(null);
+        }
+      });
+    });
   }
 
-  function splitFiles(allXmapFiles: File[]): { contigFiles: File[]; refineFinalFile: File | null } {
-    let refineFinalFile: File | null = null;
-    const contigFiles: File[] = [];
-    for (const f of allXmapFiles) {
-      if (f.name === REFINEFINAL_NAME) {
-        refineFinalFile = f;
-      } else {
-        contigFiles.push(f);
-      }
-    }
-    return { contigFiles, refineFinalFile };
-  }
-
-  function handleChange(e: Event, zoneIndex: number) {
-    const input = e.target as HTMLInputElement;
-    const files = input.files;
-    if (!files || files.length === 0) return;
-    const xmapFiles = Array.from(files).filter(f => isWantedXmap(f.name));
-    const { contigFiles, refineFinalFile } = splitFiles(xmapFiles);
-    zones[zoneIndex].contigFiles = contigFiles;
-    zones[zoneIndex].refineFinalFile = refineFinalFile;
-    zones[zoneIndex].dirName = getDirName(xmapFiles);
-    zones[zoneIndex].missingRefineFinal = refineFinalFile === null && xmapFiles.length > 0;
-    zones = [...zones];
-    input.value = '';
-  }
-
-  async function collectFromDirectory(dir: FileSystemDirectoryEntry): Promise<File[]> {
+  async function collectXmapsFromDir(dir: FileSystemDirectoryEntry): Promise<File[]> {
     const files: File[] = [];
     const reader = dir.createReader();
     while (true) {
@@ -78,19 +58,71 @@
       );
       if (entries.length === 0) break;
       for (const entry of entries) {
-        if (entry.isFile && isWantedXmap(entry.name)) {
+        if (entry.isFile && entry.name.endsWith('.xmap')) {
           const file = await new Promise<File>((resolve, reject) =>
             (entry as FileSystemFileEntry).file(resolve, reject)
           );
           files.push(file);
-        } else if (entry.isDirectory) {
-          const subFiles = await collectFromDirectory(entry as FileSystemDirectoryEntry);
-          files.push(...subFiles);
+        }
+      }
+    }
+    return files;
+  }
+
+  async function collectFromDirectory(dir: FileSystemDirectoryEntry): Promise<{
+    contigFiles: File[];
+    refineFinalFile: File | null;
+  }> {
+    const contigFiles: File[] = [];
+    let refineFinalFile: File | null = null;
+
+    const contigDir = await walkDirectory(dir, CONTIG_PATH);
+    if (contigDir) {
+      const allFiles = await collectXmapsFromDir(contigDir);
+      for (const f of allFiles) {
+        if (f.name !== REFINEFINAL_NAME) {
+          contigFiles.push(f);
         }
       }
     }
 
-    return files;
+    const rootFiles = await collectXmapsFromDir(dir);
+    refineFinalFile = rootFiles.find(f => f.name === REFINEFINAL_NAME) ?? null;
+
+    return { contigFiles, refineFinalFile };
+  }
+
+  function handleChange(e: Event, zoneIndex: number) {
+    const input = e.target as HTMLInputElement;
+    const fileList = input.files;
+    if (!fileList || fileList.length === 0) return;
+
+    const allFiles = Array.from(fileList);
+    const contigFiles: File[] = [];
+    let refineFinalFile: File | null = null;
+    let dirName = '';
+
+    const contigPathStr = CONTIG_PATH.join('/');
+
+    for (const f of allFiles) {
+      const rel = (f as any).webkitRelativePath as string;
+      if (!dirName) dirName = rel.split('/')[0];
+      const normalized = rel.replace(/\\/g, '/');
+      const parts = normalized.split('/');
+
+      if (normalized.includes(contigPathStr) && f.name.endsWith('.xmap') && f.name !== REFINEFINAL_NAME) {
+        contigFiles.push(f);
+      } else if (parts.length === 2 && f.name === REFINEFINAL_NAME) {
+        refineFinalFile = f;
+      }
+    }
+
+    zones[zoneIndex].contigFiles = contigFiles;
+    zones[zoneIndex].refineFinalFile = refineFinalFile;
+    zones[zoneIndex].dirName = dirName;
+    zones[zoneIndex].missingRefineFinal = refineFinalFile === null && contigFiles.length > 0;
+    zones = [...zones];
+    input.value = '';
   }
 
   async function handleDrop(e: DragEvent, zoneIndex: number) {
@@ -103,30 +135,22 @@
     const items = e.dataTransfer?.items;
     if (!items) return;
 
-    const filePromises: Promise<File[]>[] = [];
     for (let i = 0; i < items.length; i++) {
       const entry = items[i].webkitGetAsEntry?.();
       if (entry?.isDirectory) {
-        filePromises.push(collectFromDirectory(entry as FileSystemDirectoryEntry));
-      } else if (entry?.isFile) {
-        filePromises.push(
-          new Promise<File[]>((resolve, reject) =>
-            (entry as FileSystemFileEntry).file(f => resolve([f]), reject)
-          )
+        const { contigFiles, refineFinalFile } = await collectFromDirectory(
+          entry as FileSystemDirectoryEntry
         );
+        if (contigFiles.length > 0 || refineFinalFile) {
+          zones[zoneIndex].contigFiles = contigFiles;
+          zones[zoneIndex].refineFinalFile = refineFinalFile;
+          zones[zoneIndex].dirName = entry.name;
+          zones[zoneIndex].missingRefineFinal = refineFinalFile === null && contigFiles.length > 0;
+          zones = [...zones];
+          break;
+        }
       }
     }
-
-    const nested = await Promise.all(filePromises);
-    const allFiles = nested.flat();
-    const xmapFiles = allFiles.filter(f => f.name.endsWith('.xmap'));
-    if (xmapFiles.length === 0) return;
-    const { contigFiles, refineFinalFile } = splitFiles(xmapFiles);
-    zones[zoneIndex].contigFiles = contigFiles;
-    zones[zoneIndex].refineFinalFile = refineFinalFile;
-    zones[zoneIndex].dirName = getDirName(xmapFiles);
-    zones[zoneIndex].missingRefineFinal = refineFinalFile === null;
-    zones = [...zones];
   }
 
   function handleDragEnter(e: DragEvent, zoneIndex: number) {
@@ -251,20 +275,14 @@
     </button>
   </div>
 
-  <p class="requirement">Select 2–3 genome folders, each must contain contig .xmap files and exp_refineFinal1.xmap</p>
+  <p class="requirement">Select 2–3 genome folders.</p>
 </div>
 
 <style>
-  /* ---------------------------------------------------------------------
-     Layout containers
-     --------------------------------------------------------------------- */
   .uploader { display: flex; flex-direction: column; gap: 1.25rem; }
 
   .zones { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; }
 
-  /* ---------------------------------------------------------------------
-     Zone: the main drop target
-     --------------------------------------------------------------------- */
   .zone {
     position: relative;
     border: 2.5px dashed var(--border-color-dark);
@@ -311,9 +329,6 @@
   .zone:hover .zone-empty svg { color: var(--zone-color); }
   .zone-hint { margin: 0; font-size: 0.875rem; color: var(--text-secondary); }
 
-  /* ---------------------------------------------------------------------
-     Buttons inside a zone
-     --------------------------------------------------------------------- */
   .pick-btn,
   .change-btn {
     pointer-events: auto;
@@ -340,7 +355,6 @@
     color: var(--zone-color);
   }
 
-  /* Metadata text shown in a populated zone. */
   .dir-name { margin: 0; font-size: 0.9rem; font-weight: 600; color: var(--text-primary); word-break: break-all; }
   .file-count { margin: 0; font-size: 0.75rem; color: var(--text-secondary); }
   .file-count.warn { color: var(--warning); }
@@ -366,9 +380,6 @@
   }
   .remove-zone:hover { background: var(--error-bg); color: var(--error); }
 
-  /* ---------------------------------------------------------------------
-     Bottom action row
-     --------------------------------------------------------------------- */
   .actions { display: flex; justify-content: space-between; align-items: center; }
 
   .add-genome-btn {
