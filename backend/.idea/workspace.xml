@@ -1,0 +1,662 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="ALL" />
+  </component>
+  <component name="CargoProjects">
+    <cargoProject FILE="$PROJECT_DIR$/Cargo.toml">
+      <package file="$PROJECT_DIR$">
+        <enabledFeature name="default" />
+      </package>
+    </cargoProject>
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="d212239f-9203-44a0-be22-6339403e03f8" name="Changes" comment="b4 final cleanup and refactor" />
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="ChangesViewManager" show_ignored="true" />
+  <component name="ExecutionTargetManager" SELECTED_TARGET="RsBuildProfile:dev" />
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Rust File" />
+      </list>
+    </option>
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$/.." />
+  </component>
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;Dr00gy&quot;
+  }
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;https://github.com/Dr00gy/bachelors-thesis.git&quot;,
+    &quot;accountId&quot;: &quot;25a24324-6d3f-4893-9ec0-d70ee04cb030&quot;
+  }
+}</component>
+  <component name="MacroExpansionManager">
+    <option name="directoryName" value="UDgTeZFh" />
+  </component>
+  <component name="ProblemsViewState">
+    <option name="selectedTabId" value="CurrentFile" />
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 7
+}</component>
+  <component name="ProjectId" id="32sdPh9Iu8tdFIc9VXGhroNiAjj" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ASKED_MARK_IGNORED_FILES_AS_EXCLUDED&quot;: &quot;true&quot;,
+    &quot;Cargo.Run.executor&quot;: &quot;Run&quot;,
+    &quot;Cargo.build.executor&quot;: &quot;Run&quot;,
+    &quot;Cargo.check.executor&quot;: &quot;Run&quot;,
+    &quot;Cargo.clean.executor&quot;: &quot;Run&quot;,
+    &quot;Cargo.update.executor&quot;: &quot;Run&quot;,
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.rust.reset.selective.auto.import&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;aaaa&quot;,
+    &quot;last_opened_file_path&quot;: &quot;/home/darin/Tech/School/bachelors-thesis/bachelors-thesis/backend&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;org.rust.cargo.project.model.PROJECT_DISCOVERY&quot;: &quot;true&quot;,
+    &quot;org.rust.cargo.project.model.impl.CargoExternalSystemProjectAware.subscribe.first.balloon&quot;: &quot;&quot;,
+    &quot;org.rust.first.attach.projects&quot;: &quot;true&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
+  }
+}</component>
+  <component name="RunAnythingCache">
+    <option name="myCommands">
+      <command value="cargo clean" />
+      <command value="cargo build" />
+      <command value="cargo check" />
+      <command value="cargo update" />
+    </option>
+  </component>
+  <component name="RunManager" selected="Cargo.build">
+    <configuration name="Run" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
+      <option name="buildProfileId" value="dev" />
+      <option name="command" value="run --package backend --bin backend" />
+      <option name="workingDirectory" value="file://$PROJECT_DIR$" />
+      <envs />
+      <option name="emulateTerminal" value="true" />
+      <option name="channel" value="DEFAULT" />
+      <option name="requiredFeatures" value="true" />
+      <option name="allFeatures" value="false" />
+      <option name="withSudo" value="false" />
+      <option name="buildTarget" value="REMOTE" />
+      <option name="backtrace" value="SHORT" />
+      <option name="isRedirectInput" value="false" />
+      <option name="redirectInputPath" value="" />
+      <method v="2">
+        <option name="CARGO.BUILD_TASK_PROVIDER" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="build" type="CargoCommandRunConfiguration" factoryName="Cargo Command" temporary="true">
+      <option name="buildProfileId" value="dev" />
+      <option name="command" value="build" />
+      <option name="workingDirectory" value="file://$PROJECT_DIR$" />
+      <envs />
+      <option name="emulateTerminal" value="true" />
+      <option name="channel" value="DEFAULT" />
+      <option name="requiredFeatures" value="true" />
+      <option name="allFeatures" value="false" />
+      <option name="withSudo" value="false" />
+      <option name="buildTarget" value="REMOTE" />
+      <option name="backtrace" value="SHORT" />
+      <option name="isRedirectInput" value="false" />
+      <option name="redirectInputPath" value="" />
+      <method v="2">
+        <option name="CARGO.BUILD_TASK_PROVIDER" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="check" type="CargoCommandRunConfiguration" factoryName="Cargo Command" temporary="true">
+      <option name="command" value="check" />
+      <option name="workingDirectory" value="file://$PROJECT_DIR$" />
+      <envs />
+      <option name="emulateTerminal" value="true" />
+      <option name="channel" value="DEFAULT" />
+      <option name="requiredFeatures" value="true" />
+      <option name="allFeatures" value="false" />
+      <option name="withSudo" value="false" />
+      <option name="buildTarget" value="REMOTE" />
+      <option name="backtrace" value="SHORT" />
+      <option name="isRedirectInput" value="false" />
+      <option name="redirectInputPath" value="" />
+      <method v="2">
+        <option name="CARGO.BUILD_TASK_PROVIDER" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="clean" type="CargoCommandRunConfiguration" factoryName="Cargo Command" temporary="true">
+      <option name="command" value="clean" />
+      <option name="workingDirectory" value="file://$PROJECT_DIR$" />
+      <envs />
+      <option name="emulateTerminal" value="true" />
+      <option name="channel" value="DEFAULT" />
+      <option name="requiredFeatures" value="true" />
+      <option name="allFeatures" value="false" />
+      <option name="withSudo" value="false" />
+      <option name="buildTarget" value="REMOTE" />
+      <option name="backtrace" value="SHORT" />
+      <option name="isRedirectInput" value="false" />
+      <option name="redirectInputPath" value="" />
+      <method v="2">
+        <option name="CARGO.BUILD_TASK_PROVIDER" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="update" type="CargoCommandRunConfiguration" factoryName="Cargo Command" temporary="true">
+      <option name="command" value="update" />
+      <option name="workingDirectory" value="file://$PROJECT_DIR$" />
+      <envs />
+      <option name="emulateTerminal" value="true" />
+      <option name="channel" value="DEFAULT" />
+      <option name="requiredFeatures" value="true" />
+      <option name="allFeatures" value="false" />
+      <option name="withSudo" value="false" />
+      <option name="buildTarget" value="REMOTE" />
+      <option name="backtrace" value="SHORT" />
+      <option name="isRedirectInput" value="false" />
+      <option name="redirectInputPath" value="" />
+      <method v="2">
+        <option name="CARGO.BUILD_TASK_PROVIDER" enabled="true" />
+      </method>
+    </configuration>
+    <recent_temporary>
+      <list>
+        <item itemvalue="Cargo.build" />
+        <item itemvalue="Cargo.update" />
+        <item itemvalue="Cargo.check" />
+        <item itemvalue="Cargo.clean" />
+      </list>
+    </recent_temporary>
+  </component>
+  <component name="RustProjectSettings">
+    <option name="toolchainHomeDirectory" value="/usr/bin" />
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="d212239f-9203-44a0-be22-6339403e03f8" name="Changes" comment="" />
+      <created>1758213192387</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1758213192387</updated>
+      <workItem from="1758213193737" duration="6014000" />
+      <workItem from="1758302003508" duration="715000" />
+      <workItem from="1758305082745" duration="1091000" />
+      <workItem from="1758357332286" duration="645000" />
+      <workItem from="1758874884956" duration="600000" />
+      <workItem from="1759044667150" duration="1670000" />
+      <workItem from="1760290818984" duration="7237000" />
+      <workItem from="1760692158841" duration="5493000" />
+      <workItem from="1760701384664" duration="14472000" />
+      <workItem from="1760772796610" duration="18733000" />
+      <workItem from="1760880163611" duration="5000000" />
+      <workItem from="1760901171498" duration="277000" />
+      <workItem from="1761390411367" duration="324000" />
+      <workItem from="1761492319622" duration="2034000" />
+      <workItem from="1761506878047" duration="839000" />
+      <workItem from="1761996179715" duration="9764000" />
+      <workItem from="1762079784969" duration="6470000" />
+      <workItem from="1762534094725" duration="6156000" />
+      <workItem from="1762547161347" duration="726000" />
+      <workItem from="1762556733620" duration="1613000" />
+      <workItem from="1762599394443" duration="1256000" />
+      <workItem from="1762610754381" duration="967000" />
+      <workItem from="1762618169937" duration="5751000" />
+      <workItem from="1762692525997" duration="1111000" />
+      <workItem from="1762694921449" duration="137000" />
+      <workItem from="1762696945530" duration="198000" />
+      <workItem from="1762697257437" duration="702000" />
+      <workItem from="1762698516219" duration="712000" />
+      <workItem from="1762699390111" duration="413000" />
+      <workItem from="1762700692927" duration="156000" />
+      <workItem from="1762701535344" duration="225000" />
+      <workItem from="1762702185991" duration="106000" />
+      <workItem from="1762703191607" duration="1231000" />
+      <workItem from="1762708300146" duration="402000" />
+      <workItem from="1762709144980" duration="8554000" />
+      <workItem from="1762721457732" duration="4257000" />
+      <workItem from="1762772936368" duration="610000" />
+      <workItem from="1762790961907" duration="2213000" />
+      <workItem from="1762809714431" duration="1315000" />
+      <workItem from="1762978262790" duration="2714000" />
+      <workItem from="1763138209918" duration="1688000" />
+      <workItem from="1763198149902" duration="5199000" />
+      <workItem from="1763286992407" duration="323000" />
+      <workItem from="1763377392211" duration="1593000" />
+      <workItem from="1763379088309" duration="320000" />
+      <workItem from="1770033564056" duration="3057000" />
+      <workItem from="1770055161993" duration="1164000" />
+      <workItem from="1770064516836" duration="147000" />
+      <workItem from="1770121299324" duration="2861000" />
+      <workItem from="1770138074174" duration="629000" />
+      <workItem from="1770139037956" duration="317000" />
+      <workItem from="1770155343296" duration="649000" />
+      <workItem from="1770156576692" duration="321000" />
+      <workItem from="1770232665950" duration="529000" />
+      <workItem from="1770233373650" duration="145000" />
+      <workItem from="1770627670239" duration="1493000" />
+      <workItem from="1771323831209" duration="3006000" />
+      <workItem from="1775117133410" duration="4333000" />
+      <workItem from="1775200816448" duration="1600000" />
+      <workItem from="1775207397445" duration="2268000" />
+      <workItem from="1775290383761" duration="602000" />
+      <workItem from="1775463628157" duration="3886000" />
+      <workItem from="1775594343882" duration="491000" />
+      <workItem from="1776067296642" duration="599000" />
+      <workItem from="1776150900305" duration="1080000" />
+      <workItem from="1776325499060" duration="10792000" />
+      <workItem from="1776412556628" duration="6842000" />
+      <workItem from="1776424474654" duration="6059000" />
+      <workItem from="1776435980057" duration="100000" />
+      <workItem from="1776509430972" duration="46000" />
+      <workItem from="1776509887894" duration="16000" />
+      <workItem from="1776521302283" duration="68000" />
+      <workItem from="1776523913845" duration="32000" />
+      <workItem from="1776524487481" duration="206000" />
+      <workItem from="1776524895183" duration="116000" />
+      <workItem from="1776536917320" duration="32000" />
+      <workItem from="1776539979702" duration="45000" />
+      <workItem from="1776544864551" duration="369000" />
+      <workItem from="1776588344579" duration="98000" />
+      <workItem from="1776592632661" duration="75000" />
+      <workItem from="1776605037052" duration="24000" />
+      <workItem from="1776623171983" duration="114000" />
+      <workItem from="1776626929892" duration="72000" />
+      <workItem from="1776672226804" duration="1004000" />
+      <workItem from="1776717438937" duration="1304000" />
+      <workItem from="1776719381274" duration="5953000" />
+      <workItem from="1776804126550" duration="1887000" />
+      <workItem from="1776806154393" duration="254000" />
+      <workItem from="1776808180170" duration="6000" />
+      <workItem from="1776808708047" duration="20000" />
+      <workItem from="1776811614452" duration="53000" />
+      <workItem from="1776986678765" duration="116000" />
+      <workItem from="1776987605778" duration="1850000" />
+      <workItem from="1777012191548" duration="3178000" />
+      <workItem from="1777015731494" duration="643000" />
+      <workItem from="1777020262203" duration="981000" />
+      <workItem from="1777022072499" duration="816000" />
+      <workItem from="1777023115887" duration="27000" />
+    </task>
+    <task id="LOCAL-00001" summary="FE components dev and testing, working with hg38 and chm13, testing, will generalise and connect to FE">
+      <option name="closed" value="true" />
+      <created>1760301907843</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1760301907843</updated>
+    </task>
+    <task id="LOCAL-00002" summary="Generalising, doing my own decoding, actually connecting to backend and starting to fix FE logic for its actual purpose">
+      <option name="closed" value="true" />
+      <created>1760712757837</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1760712757837</updated>
+    </task>
+    <task id="LOCAL-00003" summary="Generalising, doing my own decoding, actually connecting to backend and starting to fix FE logic for its actual purpose">
+      <option name="closed" value="true" />
+      <created>1760714729008</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1760714729008</updated>
+    </task>
+    <task id="LOCAL-00004" summary="Fixed up decoding, added filters and other components onto page for now to clarify visual style later, leaving in debugging, better flow lines">
+      <option name="closed" value="true" />
+      <created>1760804614896</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1760804614896</updated>
+    </task>
+    <task id="LOCAL-00005" summary="Added some overall stats, change of flow lines transparency based on confidence, correct genome sizes, filters">
+      <option name="closed" value="true" />
+      <created>1760811824715</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1760811824715</updated>
+    </task>
+    <task id="LOCAL-00006" summary="Bezier curve flow lines pinched closer to center for more accurate placement of mappings, remapped scale and other small tweaks, tried generating documentation with Deep Seek">
+      <option name="closed" value="true" />
+      <created>1760887327022</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1760887327022</updated>
+    </task>
+    <task id="LOCAL-00007" summary="Bezier curve flow lines pinched closer to center for more accurate placement of mappings, remapped scale and other small tweaks, tried generating documentation with Deep Seek">
+      <option name="closed" value="true" />
+      <created>1760887340806</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1760887340806</updated>
+    </task>
+    <task id="LOCAL-00008" summary="Modularisation and deduplication of self flow lines, will have to test it on different test files a bit more for edge cases">
+      <option name="closed" value="true" />
+      <created>1760901428544</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1760901428544</updated>
+    </task>
+    <task id="LOCAL-00009" summary="Docker compose">
+      <option name="closed" value="true" />
+      <created>1761504821670</created>
+      <option name="number" value="00009" />
+      <option name="presentableId" value="LOCAL-00009" />
+      <option name="project" value="LOCAL" />
+      <updated>1761504821670</updated>
+    </task>
+    <task id="LOCAL-00010" summary="bye Svelte README in FE, you sneaky booger">
+      <option name="closed" value="true" />
+      <created>1761507062516</created>
+      <option name="number" value="00010" />
+      <option name="presentableId" value="LOCAL-00010" />
+      <option name="project" value="LOCAL" />
+      <updated>1761507062516</updated>
+    </task>
+    <task id="LOCAL-00011" summary="Removed test component, made sure Donut controls include slide, unified and prettified the visuals. Added tab for second view of the assignment.">
+      <option name="closed" value="true" />
+      <created>1762014375665</created>
+      <option name="number" value="00011" />
+      <option name="presentableId" value="LOCAL-00011" />
+      <option name="project" value="LOCAL" />
+      <updated>1762014375665</updated>
+    </task>
+    <task id="LOCAL-00012" summary="Responsivity of the widgets on the first tab. Move the widgets to its own file asap">
+      <option name="closed" value="true" />
+      <created>1762017050651</created>
+      <option name="number" value="00012" />
+      <option name="presentableId" value="LOCAL-00012" />
+      <option name="project" value="LOCAL" />
+      <updated>1762017050651</updated>
+    </task>
+    <task id="LOCAL-00013" summary="Correctly committed tabs, modularised some more.">
+      <option name="closed" value="true" />
+      <created>1762019048812</created>
+      <option name="number" value="00013" />
+      <option name="presentableId" value="LOCAL-00013" />
+      <option name="project" value="LOCAL" />
+      <updated>1762019048812</updated>
+    </task>
+    <task id="LOCAL-00014" summary="Generated persistant dark mode, but corrected contrasts">
+      <option name="closed" value="true" />
+      <created>1762022137124</created>
+      <option name="number" value="00014" />
+      <option name="presentableId" value="LOCAL-00014" />
+      <option name="project" value="LOCAL" />
+      <updated>1762022137124</updated>
+    </task>
+    <task id="LOCAL-00015" summary="Generated persistant dark mode, but corrected contrasts">
+      <option name="closed" value="true" />
+      <created>1762022161502</created>
+      <option name="number" value="00015" />
+      <option name="presentableId" value="LOCAL-00015" />
+      <option name="project" value="LOCAL" />
+      <updated>1762022161502</updated>
+    </task>
+    <task id="LOCAL-00016" summary="Edited widget to be more intuitive and more accurate to professors vision as a list of totally unique occurences">
+      <option name="closed" value="true" />
+      <created>1762028783289</created>
+      <option name="number" value="00016" />
+      <option name="presentableId" value="LOCAL-00016" />
+      <option name="project" value="LOCAL" />
+      <updated>1762028783289</updated>
+    </task>
+    <task id="LOCAL-00017" summary="Small tweaks">
+      <option name="closed" value="true" />
+      <created>1762029281620</created>
+      <option name="number" value="00017" />
+      <option name="presentableId" value="LOCAL-00017" />
+      <option name="project" value="LOCAL" />
+      <updated>1762029281620</updated>
+    </task>
+    <task id="LOCAL-00018" summary="Created Area Analysis view, paginated, might reconsider multiple chromosome selection and visualisation solution. Changed test files very slightly, will extend testing files and testing framework for gradually scaling up the app">
+      <option name="closed" value="true" />
+      <created>1762094322220</created>
+      <option name="number" value="00018" />
+      <option name="presentableId" value="LOCAL-00018" />
+      <option name="project" value="LOCAL" />
+      <updated>1762094322221</updated>
+    </task>
+    <task id="LOCAL-00019" summary="Release of the version of my project that includes FE testing, including a unit test, a component test, an integration test and an interaction test.">
+      <option name="closed" value="true" />
+      <created>1762539555872</created>
+      <option name="number" value="00019" />
+      <option name="presentableId" value="LOCAL-00019" />
+      <option name="project" value="LOCAL" />
+      <updated>1762539555872</updated>
+    </task>
+    <task id="LOCAL-00020" summary="Old testing files demoted to mini version and added realistic AI generated .xmap files for primary testing.">
+      <option name="closed" value="true" />
+      <created>1762542063827</created>
+      <option name="number" value="00020" />
+      <option name="presentableId" value="LOCAL-00020" />
+      <option name="project" value="LOCAL" />
+      <updated>1762542063827</updated>
+    </task>
+    <task id="LOCAL-00021" summary="AI broke binds and reactivity of the filter widget during help with modularisation. Fixed it and added pagination to widgets on the chromosomial tab. Added a persistent filter store. Fixed some warnings by declaring problematic modules. Incode documentation generated by AI.">
+      <option name="closed" value="true" />
+      <created>1762557934486</created>
+      <option name="number" value="00021" />
+      <option name="presentableId" value="LOCAL-00021" />
+      <option name="project" value="LOCAL" />
+      <updated>1762557934486</updated>
+    </task>
+    <task id="LOCAL-00022" summary="Fixed up some components visually, mainly fixed CSS for area view, as the absolute positioning did not allow for vertical stacking of contigs. Added a favicon, created more test files and put them into a zip. Pagination and search functionality in both views instead of placeholder text with approximating the rest of the instances. Accesibility warning fixed just because I did not like having it in the IDE + to put smth more into the text. Paginated area window still does not work perfectly, but will fix soon. Module errors fixed even if functionality was unnaffected. AI messed up binds when I needed to modularise efficiently and I fixed that too. Filter dropdowns have sensible options.">
+      <option name="closed" value="true" />
+      <created>1762620545984</created>
+      <option name="number" value="00022" />
+      <option name="presentableId" value="LOCAL-00022" />
+      <option name="project" value="LOCAL" />
+      <updated>1762620545984</updated>
+    </task>
+    <task id="LOCAL-00023" summary="Decided to move components to routes, changed paths, bincodeDecoder fully utilises DataView now. Could use WebAssembly if it was too slow, but when testing with absolutely massive files, it is pretty fast. We will see.">
+      <option name="closed" value="true" />
+      <created>1762636335317</created>
+      <option name="number" value="00023" />
+      <option name="presentableId" value="LOCAL-00023" />
+      <option name="project" value="LOCAL" />
+      <updated>1762636335317</updated>
+    </task>
+    <task id="LOCAL-00024" summary="Only fixed up IDE warns / errors with wonky imports.">
+      <option name="closed" value="true" />
+      <created>1762718254451</created>
+      <option name="number" value="00024" />
+      <option name="presentableId" value="LOCAL-00024" />
+      <option name="project" value="LOCAL" />
+      <updated>1762718254451</updated>
+    </task>
+    <task id="LOCAL-00025" summary="Correct bp sizes of genomes, decided to sum chromosome lengths even if there was not a match, just so we know how big the genome really is even in the app. I do not need to save resources on rendering.">
+      <option name="closed" value="true" />
+      <created>1762725966114</created>
+      <option name="number" value="00025" />
+      <option name="presentableId" value="LOCAL-00025" />
+      <option name="project" value="LOCAL" />
+      <updated>1762725966114</updated>
+    </task>
+    <task id="LOCAL-00026" summary="Reduced chunk size for better load balancing and potentially better use of cache. Increased buffer for big files, because sometimes I do run into problems with it being so low during tests.">
+      <option name="closed" value="true" />
+      <created>1762726382161</created>
+      <option name="number" value="00026" />
+      <option name="presentableId" value="LOCAL-00026" />
+      <option name="project" value="LOCAL" />
+      <updated>1762726382161</updated>
+    </task>
+    <task id="LOCAL-00027" summary="Thought X and Y was gonna be somehow merged in the 23rd RefContigID, but then I remembered it is actually seperated.">
+      <option name="closed" value="true" />
+      <created>1762791286865</created>
+      <option name="number" value="00027" />
+      <option name="presentableId" value="LOCAL-00027" />
+      <option name="project" value="LOCAL" />
+      <updated>1762791286865</updated>
+    </task>
+    <task id="LOCAL-00028" summary="Graph now utilises D3 library, atleast somewhat, cause I rlly should not be creating my own solution completely from scratch, zoom and internal selections included. Persistence update. Pagination search actually works for all pages now.">
+      <option name="closed" value="true" />
+      <created>1763203126016</created>
+      <option name="number" value="00028" />
+      <option name="presentableId" value="LOCAL-00028" />
+      <option name="project" value="LOCAL" />
+      <updated>1763203126016</updated>
+    </task>
+    <task id="LOCAL-00029" summary="Comments.">
+      <option name="closed" value="true" />
+      <created>1763203199363</created>
+      <option name="number" value="00029" />
+      <option name="presentableId" value="LOCAL-00029" />
+      <option name="project" value="LOCAL" />
+      <updated>1763203199363</updated>
+    </task>
+    <task id="LOCAL-00030" summary="Moved import that I accidentally left in the middle of the code. Lazified the app and gave instant feedback by slowly drawing the donut and rendering UI once chromosome hashmap comes in. Page does not work like a batch now, awaits, i.e. async generator pattern. Just have to fix Area Analysis and apply lazyfication there too and I AM DONE BABYYYYY">
+      <option name="closed" value="true" />
+      <created>1763247983219</created>
+      <option name="number" value="00030" />
+      <option name="presentableId" value="LOCAL-00030" />
+      <option name="project" value="LOCAL" />
+      <updated>1763247983219</updated>
+    </task>
+    <task id="LOCAL-00031" summary="Overhaul">
+      <option name="closed" value="true" />
+      <created>1776179175052</created>
+      <option name="number" value="00031" />
+      <option name="presentableId" value="LOCAL-00031" />
+      <option name="project" value="LOCAL" />
+      <updated>1776179175052</updated>
+    </task>
+    <task id="LOCAL-00032" summary="Before refactor and code doc">
+      <option name="closed" value="true" />
+      <created>1776378350747</created>
+      <option name="number" value="00032" />
+      <option name="presentableId" value="LOCAL-00032" />
+      <option name="project" value="LOCAL" />
+      <updated>1776378350747</updated>
+    </task>
+    <task id="LOCAL-00033" summary="Before refactor and code doc">
+      <option name="closed" value="true" />
+      <created>1776378390111</created>
+      <option name="number" value="00033" />
+      <option name="presentableId" value="LOCAL-00033" />
+      <option name="project" value="LOCAL" />
+      <updated>1776378390112</updated>
+    </task>
+    <task id="LOCAL-00034" summary="Documenting">
+      <option name="closed" value="true" />
+      <created>1776418553547</created>
+      <option name="number" value="00034" />
+      <option name="presentableId" value="LOCAL-00034" />
+      <option name="project" value="LOCAL" />
+      <updated>1776418553547</updated>
+    </task>
+    <task id="LOCAL-00035" summary="close">
+      <option name="closed" value="true" />
+      <created>1776509465384</created>
+      <option name="number" value="00035" />
+      <option name="presentableId" value="LOCAL-00035" />
+      <option name="project" value="LOCAL" />
+      <updated>1776509465384</updated>
+    </task>
+    <task id="LOCAL-00036" summary="b4 handling full real files">
+      <option name="closed" value="true" />
+      <created>1776523927507</created>
+      <option name="number" value="00036" />
+      <option name="presentableId" value="LOCAL-00036" />
+      <option name="project" value="LOCAL" />
+      <updated>1776523927507</updated>
+    </task>
+    <task id="LOCAL-00037" summary="b4 optimisations">
+      <option name="closed" value="true" />
+      <created>1776536934940</created>
+      <option name="number" value="00037" />
+      <option name="presentableId" value="LOCAL-00037" />
+      <option name="project" value="LOCAL" />
+      <updated>1776536934940</updated>
+    </task>
+    <task id="LOCAL-00038" summary="b4 architectural change">
+      <option name="closed" value="true" />
+      <created>1776540007203</created>
+      <option name="number" value="00038" />
+      <option name="presentableId" value="LOCAL-00038" />
+      <option name="project" value="LOCAL" />
+      <updated>1776540007203</updated>
+    </task>
+    <task id="LOCAL-00039" summary="b4 final cleanup and refactor">
+      <option name="closed" value="true" />
+      <created>1776626966800</created>
+      <option name="number" value="00039" />
+      <option name="presentableId" value="LOCAL-00039" />
+      <option name="project" value="LOCAL" />
+      <updated>1776626966800</updated>
+    </task>
+    <task id="LOCAL-00040" summary="b4 final cleanup and refactor">
+      <option name="closed" value="true" />
+      <created>1777022213319</created>
+      <option name="number" value="00040" />
+      <option name="presentableId" value="LOCAL-00040" />
+      <option name="project" value="LOCAL" />
+      <updated>1777022213319</updated>
+    </task>
+    <option name="localTasksCounter" value="41" />
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="Correctly committed tabs, modularised some more." />
+    <MESSAGE value="Generated persistant dark mode, but corrected contrasts" />
+    <MESSAGE value="Edited widget to be more intuitive and more accurate to professors vision as a list of totally unique occurences" />
+    <MESSAGE value="Small tweaks" />
+    <MESSAGE value="Created Area Analysis view, paginated, might reconsider multiple chromosome selection and visualisation solution. Changed test files very slightly, will extend testing files and testing framework for gradually scaling up the app" />
+    <MESSAGE value="Release of the version of my project that includes FE testing, including a unit test, a component test, an integration test and an interaction test." />
+    <MESSAGE value="Old testing files demoted to mini version and added realistic AI generated .xmap files for primary testing." />
+    <MESSAGE value="AI broke binds and reactivity of the filter widget during help with modularisation. Fixed it and added pagination to widgets on the chromosomial tab. Added a persistent filter store. Fixed some warnings by declaring problematic modules. Incode documentation generated by AI." />
+    <MESSAGE value="Fixed up some components visually, mainly fixed CSS for area view, as the absolute positioning did not allow for vertical stacking of contigs. Added a favicon, created more test files and put them into a zip. Pagination and search functionality in both views instead of placeholder text with approximating the rest of the instances. Accesibility warning fixed just because I did not like having it in the IDE + to put smth more into the text. Paginated area window still does not work perfectly, but will fix soon. Module errors fixed even if functionality was unnaffected. AI messed up binds when I needed to modularise efficiently and I fixed that too. Filter dropdowns have sensible options." />
+    <MESSAGE value="Decided to move components to routes, changed paths, bincodeDecoder fully utilises DataView now. Could use WebAssembly if it was too slow, but when testing with absolutely massive files, it is pretty fast. We will see." />
+    <MESSAGE value="Only fixed up IDE warns / errors with wonky imports." />
+    <MESSAGE value="Correct bp sizes of genomes, decided to sum chromosome lengths even if there was not a match, just so we know how big the genome really is even in the app. I do not need to save resources on rendering." />
+    <MESSAGE value="Reduced chunk size for better load balancing and potentially better use of cache. Increased buffer for big files, because sometimes I do run into problems with it being so low during tests." />
+    <MESSAGE value="Thought X and Y was gonna be somehow merged in the 23rd RefContigID, but then I remembered it is actually seperated." />
+    <MESSAGE value="Graph now utilises D3 library, atleast somewhat, cause I rlly should not be creating my own solution completely from scratch, zoom and internal selections included. Persistence update. Pagination search actually works for all pages now." />
+    <MESSAGE value="Comments." />
+    <MESSAGE value="Moved import that I accidentally left in the middle of the code. Lazified the app and gave instant feedback by slowly drawing the donut and rendering UI once chromosome hashmap comes in. Page does not work like a batch now, awaits, i.e. async generator pattern. Just have to fix Area Analysis and apply lazyfication there too and I AM DONE BABYYYYY" />
+    <MESSAGE value="Overhaul" />
+    <MESSAGE value="Before refactor and code doc" />
+    <MESSAGE value="Documenting" />
+    <MESSAGE value="close" />
+    <MESSAGE value="b4 handling full real files" />
+    <MESSAGE value="b4 optimisations" />
+    <MESSAGE value="b4 architectural change" />
+    <MESSAGE value="b4 final cleanup and refactor" />
+    <option name="LAST_COMMIT_MESSAGE" value="b4 final cleanup and refactor" />
+  </component>
+</project>
