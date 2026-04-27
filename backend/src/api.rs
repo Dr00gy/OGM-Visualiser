@@ -152,8 +152,8 @@ pub async fn create_session(
 ) -> Result<Json<CreateSessionResponse>, StatusCode> {
     let id = Uuid::new_v4();
     let staging_dir = std::env::temp_dir().join(format!("ogm-{id}"));
-    
-    if let Err(e) = tokio::fs::create_dir_all(&staging_dir).await {
+
+    if let Err(e) = tokio::fs::create_dir(&staging_dir).await {
         eprintln!("[api] !!! failed to create staging dir {staging_dir:?}: {e:?}");
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
@@ -190,12 +190,12 @@ pub async fn upload_file(
         eprintln!("[api] !!! upload: malformed session id '{session_id}'");
         StatusCode::BAD_REQUEST
     })?;
-    
+
     if !state.sessions.contains_key(&uuid) {
         eprintln!("[api] !!! upload: unknown session {uuid}");
         return Err(StatusCode::NOT_FOUND);
     }
-    
+
     let field = multipart
         .next_field()
         .await
@@ -217,7 +217,7 @@ pub async fn upload_file(
         eprintln!("[api] !!! upload: genome_index {genome_index} >= MAX_GENOMES {MAX_GENOMES}");
         return Err(StatusCode::BAD_REQUEST);
     }
-    
+
     let staging_dir = {
         let session = state.sessions.get(&uuid).ok_or_else(|| {
             eprintln!("[api] !!! upload: session {uuid} disappeared mid-upload");
@@ -225,10 +225,10 @@ pub async fn upload_file(
         })?;
         session.staging_dir.clone()
     };
-    
+
     let file_uuid = Uuid::new_v4();
     let temp_path = staging_dir.join(format!("{file_uuid}.xmap"));
-    
+
     let mut file = File::create(&temp_path).await.map_err(|e| {
         eprintln!("[api] !!! upload: File::create failed for {temp_path:?}: {e:?}");
         StatusCode::INTERNAL_SERVER_ERROR
@@ -266,7 +266,7 @@ pub async fn upload_file(
         "[api] [session {uuid}] '{field_name}' uploaded: {bytes_written} bytes in {:?}",
         upload_start.elapsed()
     );
-    
+
     {
         let mut session = state.sessions.get_mut(&uuid).ok_or_else(|| {
             eprintln!(
@@ -277,9 +277,6 @@ pub async fn upload_file(
         })?;
 
         if is_refinefinal {
-            if let Some(prev) = session.genome_refinefinal[genome_index].take() {
-                let _ = std::fs::remove_file(&prev);
-            }
             session.genome_refinefinal[genome_index] = Some(temp_path);
         } else {
             if session.genome_contig_files[genome_index].len() >= MAX_FILES_PER_GENOME {
@@ -307,18 +304,18 @@ pub async fn stream_xmap_matches(
         eprintln!("[api] !!! match: malformed session id '{session_id}'");
         StatusCode::BAD_REQUEST
     })?;
-    
+
     let (genome_contig_files, mut genome_refinefinal, store_arc) = {
         let mut entry = state.sessions.get_mut(&uuid).ok_or_else(|| {
             eprintln!("[api] !!! match: unknown session {uuid}");
             StatusCode::NOT_FOUND
         })?;
-        
+
         if entry.match_complete {
             eprintln!("[api] !!! match: session {uuid} already completed");
             return Err(StatusCode::CONFLICT);
         }
-        
+
         let contigs: Vec<Vec<PathBuf>> =
             std::mem::take(&mut entry.genome_contig_files).into_iter().collect();
         let refinefinals: Vec<Option<PathBuf>> =
@@ -328,7 +325,7 @@ pub async fn stream_xmap_matches(
         (contigs, refinefinals, store)
     };
     eprintln!("[api] [session {uuid}] files extracted for match phase");
-    
+
     let populated_genomes: Vec<usize> = genome_contig_files
         .iter()
         .enumerate()
@@ -346,18 +343,18 @@ pub async fn stream_xmap_matches(
         eprintln!("[api] !!! fewer than 2 populated genomes, rejecting");
         return Err(StatusCode::BAD_REQUEST);
     }
-    
+
     for &gi in &populated_genomes {
         if genome_refinefinal[gi].is_none() {
             eprintln!("[api] !!! genome {gi} is missing its refineFinal file");
             return Err(StatusCode::BAD_REQUEST);
         }
     }
-    
+
     let phase3_start = Instant::now();
     eprintln!("[api] [phase3] parsing refineFinal files for {} genomes", populated_genomes.len());
 
-    let mut refinefinal_lookups: Vec<Arc<std::collections::HashMap<u32, RefineFinalRecord>>> = Vec::new();
+    let mut refinefinal_lookups: Vec<Arc<std::collections::HashMap<u32, Vec<RefineFinalRecord>>>> = Vec::new();
     let mut chromosome_info_per_genome: Vec<Vec<ChromosomeInfo>> = Vec::new();
 
     for &gi in &populated_genomes {
@@ -365,7 +362,7 @@ pub async fn stream_xmap_matches(
         let rf_path_clone = rf_path.clone();
         let rf_start = Instant::now();
         eprintln!("[api] [phase3] genome {gi}: parsing refineFinal at {rf_path_clone:?}");
-        
+
         let (lookup, chr_lengths) = tokio::task::spawn_blocking(move || {
             parse_refinefinal_from_file(&rf_path_clone)
         })
@@ -385,7 +382,7 @@ pub async fn stream_xmap_matches(
             lookup.len(),
             chr_lengths.len()
         );
-        
+
         let chr_info: Vec<ChromosomeInfo> = chr_lengths
             .into_iter()
             .map(|(ref_contig_id, ref_len)| ChromosomeInfo { ref_contig_id, ref_len })
@@ -396,7 +393,7 @@ pub async fn stream_xmap_matches(
     }
 
     eprintln!("[api] [phase3] DONE in {:?}", phase3_start.elapsed());
-    
+
     let phase4_start = Instant::now();
     let total_contig_files: usize = populated_genomes
         .iter()
@@ -419,7 +416,7 @@ pub async fn stream_xmap_matches(
                 flat_idx + 1,
                 total_contig_files
             );
-            
+
             let hash = {
                 let path_clone  = temp_path.clone();
                 tokio::task::spawn_blocking(move || hash_file(&path_clone))
@@ -440,7 +437,7 @@ pub async fn stream_xmap_matches(
                 total_contig_files,
                 file_start.elapsed()
             );
-            
+
             let parse_start = Instant::now();
             let records =
                 if let Some(r) = state.cache.parsed_files.get(&hash) {
@@ -488,7 +485,7 @@ pub async fn stream_xmap_matches(
     }
 
     eprintln!("[api] [phase4] DONE in {:?}", phase4_start.elapsed());
-    
+
     let phase5_start = Instant::now();
     eprintln!("[api] [phase5] warming indices for {} files", all_file_records.len());
 
@@ -516,7 +513,7 @@ pub async fn stream_xmap_matches(
     }
 
     eprintln!("[api] [phase5] DONE in {:?}", phase5_start.elapsed());
-    
+
     eprintln!("[api] [phase6] assembling XmapFileSet");
     let fileset_start = Instant::now();
     let file_to_genome_for_session = file_to_genome.clone();
@@ -527,12 +524,12 @@ pub async fn stream_xmap_matches(
         refinefinal_lookups.into_boxed_slice(),
     ));
     eprintln!("[api] [phase6] XmapFileSet assembled in {:?}", fileset_start.elapsed());
-    
+
     if let Some(mut entry) = state.sessions.get_mut(&uuid) {
         entry.file_to_genome = Some(file_to_genome_for_session);
         entry.touch();
     }
-    
+
     let (mut writer, reader) = tokio::io::duplex(1 << 20);
     eprintln!(
         "[api] [phase6] total setup time before spawning stream task: {:?}",
@@ -545,7 +542,7 @@ pub async fn stream_xmap_matches(
     tokio::spawn(async move {
         let stream_start = Instant::now();
         eprintln!("[api] [stream {uuid}] task started");
-        
+
         const PROGRESS_INTERVAL: Duration = Duration::from_millis(500);
         const PROGRESS_EVERY_N_MATCHES: u64 = 1000;
 
@@ -578,16 +575,16 @@ pub async fn stream_xmap_matches(
         } else {
             eprintln!("[api] [stream {uuid}] chromosome info frame sent");
         }
-        
+
         let file_to_genome_slice: Vec<usize> = sessions_for_task
             .get(&uuid)
             .and_then(|s| s.file_to_genome.clone())
             .unwrap_or_default();
-        
+
         let rx = crate::xmap::stream_matches_multi_chunked(fileset, MAX_RECORDS_PER_CHUNK);
         let (bridge_tx, mut bridge_rx) =
             tokio::sync::mpsc::channel::<crate::xmap::RecordChunk>(256);
-        
+
         tokio::task::spawn_blocking(move || {
             while let Ok(chunk) = rx.recv() {
                 if bridge_tx.blocking_send(chunk).is_err() {
@@ -648,8 +645,7 @@ pub async fn stream_xmap_matches(
                     
                     let snap = store_for_task.progress_snapshot();
                     if writer_alive
-                        && snap.total_matches.saturating_sub(last_progress_matches)
-                            >= PROGRESS_EVERY_N_MATCHES
+                        && snap.total_matches - last_progress_matches >= PROGRESS_EVERY_N_MATCHES
                     {
                         let pf = StreamFrame::Progress(ProgressFrame {
                             total_matches: snap.total_matches,
@@ -682,7 +678,7 @@ pub async fn stream_xmap_matches(
                 }
             }
         }
-        
+
         for (qry, p) in partials.drain() {
             store_for_task.push_match(
                 qry, &p.file_indices, &p.records, &file_to_genome_slice);
@@ -695,7 +691,7 @@ pub async fn stream_xmap_matches(
             "[api] [stream {uuid}] finalized aggregates in {:?}",
             finalize_start.elapsed()
         );
-        
+
         if writer_alive {
             let snap = store_for_task.progress_snapshot();
             let pf = StreamFrame::Progress(ProgressFrame {
@@ -722,7 +718,7 @@ pub async fn stream_xmap_matches(
                 eprintln!("[api] [stream {uuid}] client disconnected before Complete frame");
             }
         }
-        
+
         if let Some(mut entry) = sessions_for_task.get_mut(&uuid) {
             entry.match_complete = true;
             entry.touch();
@@ -744,7 +740,7 @@ pub async fn stream_xmap_matches(
             // Arc goes out of scope; nothing to do but log.
             eprintln!("[api] [stream {uuid}] session vanished during ingest");
         }
-        
+
         drop(writer);
         drop(store_for_task);
 

@@ -64,7 +64,7 @@ pub struct RefineFinalRecord {
 pub fn parse_refinefinal_from_file(
     path: &Path,
 ) -> Result<(
-    std::collections::HashMap<u32, RefineFinalRecord>,
+    std::collections::HashMap<u32, Vec<RefineFinalRecord>>,
     std::collections::HashMap<u8, f64>,
 ), String> {
     use std::io::{BufRead, BufReader};
@@ -73,7 +73,7 @@ pub fn parse_refinefinal_from_file(
     let file = File::open(path).map_err(|e| format!("Open refineFinal: {}", e))?;
     let reader = BufReader::with_capacity(64 * 1024, file);
 
-    let mut lookup: std::collections::HashMap<u32, RefineFinalRecord> = std::collections::HashMap::new();
+    let mut lookup: std::collections::HashMap<u32, Vec<RefineFinalRecord>> = std::collections::HashMap::new();
     let mut chr_lengths: std::collections::HashMap<u8, f64> = std::collections::HashMap::new();
 
     for line_result in reader.lines() {
@@ -98,35 +98,29 @@ pub fn parse_refinefinal_from_file(
             .map_err(|e| format!("Parse RefLen in refineFinal: {}", e))?;
 
         chr_lengths.insert(chromosome, ref_len);
-        
+
         let confidence: f64 = fields[8]
             .parse()
             .map_err(|e| format!("Parse Confidence in refineFinal: {}", e))?;
-        
-        let should_insert = lookup
-            .get(&qry_contig_id)
-            .map_or(true, |existing| confidence > existing.confidence);
 
-        if should_insert {
-            lookup.insert(qry_contig_id, RefineFinalRecord {
-                chromosome,
-                qry_start_pos: fields[3]
-                    .parse()
-                    .map_err(|e| format!("Parse QryStartPos in refineFinal: {}", e))?,
-                qry_end_pos: fields[4]
-                    .parse()
-                    .map_err(|e| format!("Parse QryEndPos in refineFinal: {}", e))?,
-                ref_start_pos: fields[5]
-                    .parse()
-                    .map_err(|e| format!("Parse RefStartPos in refineFinal: {}", e))?,
-                ref_end_pos: fields[6]
-                    .parse()
-                    .map_err(|e| format!("Parse RefEndPos in refineFinal: {}", e))?,
-                orientation: fields[7].chars().next().unwrap_or('+'),
-                confidence,
-                ref_len,
-            });
-        }
+        lookup.entry(qry_contig_id).or_default().push(RefineFinalRecord {
+            chromosome,
+            qry_start_pos: fields[3]
+                .parse()
+                .map_err(|e| format!("Parse QryStartPos in refineFinal: {}", e))?,
+            qry_end_pos: fields[4]
+                .parse()
+                .map_err(|e| format!("Parse QryEndPos in refineFinal: {}", e))?,
+            ref_start_pos: fields[5]
+                .parse()
+                .map_err(|e| format!("Parse RefStartPos in refineFinal: {}", e))?,
+            ref_end_pos: fields[6]
+                .parse()
+                .map_err(|e| format!("Parse RefEndPos in refineFinal: {}", e))?,
+            orientation: fields[7].chars().next().unwrap_or('+'),
+            confidence,
+            ref_len,
+        });
     }
     Ok((lookup, chr_lengths))
 }
@@ -249,7 +243,7 @@ pub fn parse_xmap_streaming(
                 .map_err(|e| format!("Parse Confidence: {}", e))?,
         });
     }
-    
+
     records.shrink_to_fit();
     let records_arc = Arc::new(records);
     let chr_lengths_arc = Arc::new(chromosome_lengths);
@@ -306,7 +300,7 @@ pub fn build_index(records: &[XmapRecord]) -> Arc<QryIndex> {
     for (idx, record) in records.iter().enumerate() {
         index.entry(record.qry_contig_id).or_default().push(idx as u32);
     }
-    
+
     for v in index.values_mut() {
         v.shrink_to_fit();
     }
@@ -325,7 +319,7 @@ pub struct XmapFileSet {
     /// flat_file_index to genome_index. Mirrors the frontend's `fileToGenome` array.
     pub file_to_genome: Box<[usize]>,
     /// genome_index to refineFinal lookup (keyed by `qry_contig_id`).
-    pub refinefinal_lookups: Box<[Arc<std::collections::HashMap<u32, RefineFinalRecord>>]>,
+    pub refinefinal_lookups: Box<[Arc<std::collections::HashMap<u32, Vec<RefineFinalRecord>>>]>,
 }
 
 impl XmapFileSet {
@@ -333,13 +327,13 @@ impl XmapFileSet {
         files: Box<[Arc<RecordVec>]>,
         indices: Box<[Arc<QryIndex>]>,
         file_to_genome: Box<[usize]>,
-        refinefinal_lookups: Box<[Arc<std::collections::HashMap<u32, RefineFinalRecord>>]>,
+        refinefinal_lookups: Box<[Arc<std::collections::HashMap<u32, Vec<RefineFinalRecord>>>]>,
     ) -> Self {
         debug_assert_eq!(files.len(), indices.len(),
                          "files and indices must be parallel arrays");
         Self { files, indices, file_to_genome, refinefinal_lookups }
     }
-    
+
     pub fn len(&self) -> usize {
         self.files.len()
     }
@@ -354,11 +348,11 @@ pub fn stream_matches_multi_chunked(
     max_records_per_chunk: usize,
 ) -> channel::Receiver<RecordChunk> {
     let (tx, rx) = channel::unbounded();
-    
+
     if fileset.len() < 2 {
         return rx;
     }
-    
+
     let mut global_groups: FxHashMap<u32, Vec<(usize, u32)>> = FxHashMap::default();
 
     for (file_idx, file_records) in fileset.files.iter().enumerate() {
@@ -369,7 +363,7 @@ pub fn stream_matches_multi_chunked(
                 .push((file_idx, record_idx as u32));
         }
     }
-    
+
     let num_genomes = fileset.refinefinal_lookups.len();
     let queue: Arc<SegQueue<u32>> = Arc::new(SegQueue::new());
     for (&qry_id, records) in global_groups.iter() {
@@ -377,7 +371,7 @@ pub fn stream_matches_multi_chunked(
         if !records.iter().any(|(fi, _)| *fi != first_file) {
             continue;
         }
-        
+
         let in_all = (0..num_genomes).all(|gi| {
             fileset.refinefinal_lookups
                 .get(gi)
@@ -409,13 +403,10 @@ pub fn stream_matches_multi_chunked(
 
                     let matched_records: Vec<MatchedRecord> = all_records
                         .iter()
-                        .filter_map(|(fi, _record_idx)| {
+                        .flat_map(|(fi, _ri)| {
                             let genome_idx = fileset.file_to_genome.get(*fi).copied().unwrap_or(0);
-                            let rf_rec = fileset.refinefinal_lookups
-                                .get(genome_idx)
-                                .and_then(|lut| lut.get(&qry_id))?;
-
-                            Some(MatchedRecord {
+                            let rf_recs = &fileset.refinefinal_lookups[genome_idx][&qry_id];
+                            rf_recs.iter().map(move |rf_rec| MatchedRecord {
                                 file_index:    *fi,
                                 ref_contig_id: rf_rec.chromosome,
                                 qry_start_pos: rf_rec.qry_start_pos,
@@ -521,7 +512,7 @@ pub fn parse_xmap_from_file(
                 .map_err(|e| format!("Parse Confidence: {}", e))?,
         });
     }
-    
+
     records.shrink_to_fit();
     let records_arc = Arc::new(records);
     let chr_lengths_arc = Arc::new(chromosome_lengths);
@@ -685,22 +676,35 @@ mod tests {
         let (file2_records, _) = parse_xmap_file(file2_content).unwrap();
         let idx1 = build_index(&file1_records);
         let idx2 = build_index(&file2_records);
-        // NOTE: refineFinal lookups are empty here, which means the
-        // "must appear in every genome's refineFinal" filter will skip
-        // every qry_id if `num_genomes > 0`. We pass two empty lookup
-        // maps so `num_genomes == 2` and the filter rejects everything…
-        // which is wrong for this test if you read it carefully. It
-        // actually relies on the filter's behaviour prior to the
-        // refineFinal gate being added — preserved here as-is to keep
-        // test semantics stable.
+
+        let mut rf_lookup: std::collections::HashMap<u32, Vec<RefineFinalRecord>> = std::collections::HashMap::new();
+        rf_lookup.insert(100, vec![RefineFinalRecord {
+            chromosome: 1,
+            qry_start_pos: 0.0,
+            qry_end_pos: 0.0,
+            ref_start_pos: 0.0,
+            ref_end_pos: 0.0,
+            orientation: '+',
+            confidence: 15.0,
+            ref_len: 250000.0,
+        }]);
+        rf_lookup.insert(200, vec![RefineFinalRecord {
+            chromosome: 2,
+            qry_start_pos: 0.0,
+            qry_end_pos: 0.0,
+            ref_start_pos: 0.0,
+            ref_end_pos: 0.0,
+            orientation: '-',
+            confidence: 14.5,
+            ref_len: 250000.0,
+        }]);
+        let rf_arc = Arc::new(rf_lookup);
+
         let fileset = Arc::new(XmapFileSet::new(
             vec![file1_records, file2_records].into_boxed_slice(),
             vec![idx1, idx2].into_boxed_slice(),
             vec![0usize, 1usize].into_boxed_slice(),
-            vec![
-                Arc::new(std::collections::HashMap::new()),
-                Arc::new(std::collections::HashMap::new()),
-            ].into_boxed_slice(),
+            vec![Arc::clone(&rf_arc), Arc::clone(&rf_arc)].into_boxed_slice(),
         ));
 
         let rx = stream_matches_multi_chunked(fileset, 50);
