@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::api::AppState;
-use crate::store::{ContigAggregate, decode_orientation};
+use crate::store::{SequenceAggregate, decode_orientation};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -36,6 +36,27 @@ fn ci_contains(haystack: &str, needle_lower: &str) -> bool {
     haystack.to_ascii_lowercase().contains(needle_lower)
 }
 
+fn parse_genome_csv(s: Option<&str>) -> Option<Vec<u32>> {
+    let s = s?;
+    if s.is_empty() { return None; }
+    let parsed: Vec<u32> = s
+        .split(',')
+        .filter_map(|tok| tok.trim().parse::<u32>().ok())
+        .collect();
+    if parsed.is_empty() { None } else { Some(parsed) }
+}
+
+fn framed_bincode<T: Serialize>(value: &T) -> Result<Response, StatusCode> {
+    let bytes = bincode::serialize(value).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut framed = Vec::with_capacity(4 + bytes.len());
+    framed.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+    framed.extend_from_slice(&bytes);
+    Ok((
+        [(header::CONTENT_TYPE, "application/octet-stream")],
+        Body::from(framed),
+    ).into_response())
+}
+
 // ---------------------------------------------------------------------------
 // /api/session/:id/meta
 // ---------------------------------------------------------------------------
@@ -44,7 +65,7 @@ fn ci_contains(haystack: &str, needle_lower: &str) -> bool {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MetaResponse {
     pub max_confidence: f64,
-    pub available_contig_ids: Vec<u32>,
+    pub available_sequence_ids: Vec<u32>,
     pub file_to_genome: Vec<u32>,
     pub total_matches: u64,
     pub total_records: u64,
@@ -55,10 +76,10 @@ pub async fn get_meta(
     AxumPath(session_id): AxumPath<String>,
 ) -> Result<Json<MetaResponse>, StatusCode> {
     let (_uuid, store, file_to_genome) = resolve_session(&state, &session_id)?;
-    let snap = store.progress_snapshot();
+    let snap = store.snapshot();
     let resp = MetaResponse {
         max_confidence: store.max_confidence(),
-        available_contig_ids: store.available_contig_ids(),
+        available_sequence_ids: store.available_sequence_ids(),
         file_to_genome: file_to_genome.into_iter().map(|g| g as u32).collect(),
         total_matches: snap.total_matches,
         total_records: snap.total_records,
@@ -67,11 +88,11 @@ pub async fn get_meta(
 }
 
 // ---------------------------------------------------------------------------
-// /api/session/:id/contigs ,paginated contig overview
+// /api/session/:id/sequences — paginated sequence overview
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
-pub struct ContigsQuery {
+pub struct SequencesQuery {
     #[serde(default)]
     pub q: String,
     #[serde(default = "default_search_type")]
@@ -82,34 +103,34 @@ pub struct ContigsQuery {
     pub per_page: u32,
 }
 
-fn default_search_type() -> String { "contig".to_string() }
+fn default_search_type() -> String { "sequence".to_string() }
 fn default_page() -> u32 { 1 }
 fn default_per_page() -> u32 { 10 }
 
-/// Response payload for `/contigs`.
+/// Response payload for `/sequences`.
 #[derive(Debug, Serialize)]
-pub struct ContigsPage {
+pub struct SequencesPage {
     pub total: u64,
-    pub items: Vec<ContigAggregate>,
+    pub items: Vec<SequenceAggregate>,
 }
 
-pub async fn get_contigs(
+pub async fn get_sequences(
     State(state): State<Arc<AppState>>,
     AxumPath(session_id): AxumPath<String>,
-    Query(params): Query<ContigsQuery>,
-) -> Result<Json<ContigsPage>, StatusCode> {
+    Query(params): Query<SequencesQuery>,
+) -> Result<Json<SequencesPage>, StatusCode> {
     let (_uuid, store, _file_to_genome) = resolve_session(&state, &session_id)?;
-    
+
     let per_page = params.per_page.min(200).max(1) as usize;
     let page     = params.page.max(1) as usize;
     let start    = (page - 1).saturating_mul(per_page);
-    
+
     let needle = params.q.to_ascii_lowercase();
     let search_type = params.search_type.as_str();
-    
+
     let (total, items) = store.scan_and_paginate(start, per_page, |agg| {
         match search_type {
-            "contig" => {
+            "sequence" => {
                 if needle.is_empty() { true }
                 else { agg.qry_contig_id.to_string().contains(&needle) }
             }
@@ -131,15 +152,15 @@ pub async fn get_contigs(
                     formatted.contains(&needle)
                 }
             }
-            _ => true, 
+            _ => true,
         }
     });
 
-    Ok(Json(ContigsPage { total, items }))
+    Ok(Json(SequencesPage { total, items }))
 }
 
 // ---------------------------------------------------------------------------
-// /api/session/:id/matches, paginated deduped match table
+// /api/session/:id/matches — paginated deduped match table
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
@@ -175,7 +196,7 @@ pub struct MatchEntry {
     pub records_truncated: bool,
 }
 
-const MAX_RECORDS_PER_MATCH_ENTRY: usize = 50;
+const MAX_RECORDS_PER_ENTRY: usize = 50;
 
 #[derive(Debug, Serialize)]
 pub struct MatchesPage {
@@ -197,7 +218,7 @@ pub async fn get_matches(
     let search_type = params.search_type.as_str();
     let (total, page_aggs) = store.scan_and_paginate(start, per_page, |agg| {
         match search_type {
-            "contig" => {
+            "sequence" => {
                 if needle.is_empty() { true }
                 else { agg.qry_contig_id.to_string().contains(&needle) }
             }
@@ -223,13 +244,13 @@ pub async fn get_matches(
     if page_aggs.is_empty() {
         return Ok(Json(MatchesPage { total, items: Vec::new() }));
     }
-    
-    let page_contig_ids: Vec<u32> = page_aggs.iter().map(|a| a.qry_contig_id).collect();
+
+    let page_sequence_ids: Vec<u32> = page_aggs.iter().map(|a| a.qry_contig_id).collect();
     let items: Vec<MatchEntry> = store.with_read(|inner| {
-        let mut out: Vec<MatchEntry> = Vec::with_capacity(page_contig_ids.len());
-        for &qry_id in &page_contig_ids {
-            let Some(rows) = inner.by_contig.get(&qry_id) else { continue; };
-            
+        let mut out: Vec<MatchEntry> = Vec::with_capacity(page_sequence_ids.len());
+        for &qry_id in &page_sequence_ids {
+            let Some(rows) = inner.rows_by_sequence.get(&qry_id) else { continue; };
+
             use std::collections::HashSet;
             let mut seen: HashSet<(u32, u8, u8, u64)> = HashSet::new();
             let mut records: Vec<WireRecord> = Vec::new();
@@ -260,11 +281,11 @@ pub async fn get_matches(
                 a.file_index.cmp(&b.file_index)
                     .then_with(|| a.ref_contig_id.cmp(&b.ref_contig_id))
             });
-            
+
             let total_record_count = records.len() as u32;
-            let records_truncated = records.len() > MAX_RECORDS_PER_MATCH_ENTRY;
+            let records_truncated = records.len() > MAX_RECORDS_PER_ENTRY;
             if records_truncated {
-                records.truncate(MAX_RECORDS_PER_MATCH_ENTRY);
+                records.truncate(MAX_RECORDS_PER_ENTRY);
             }
 
             out.push(MatchEntry {
@@ -281,12 +302,12 @@ pub async fn get_matches(
 }
 
 // ---------------------------------------------------------------------------
-// /api/session/:id/flows  — bincode flow pairs for the donut
+// /api/session/:id/flows — bincode flow pairs for the donut
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
 pub struct FlowsQuery {
-    /// Restrict to one query contig id.
+    /// Restrict to one query sequence id.
     pub qry: Option<u32>,
     /// First genome of a genome-pair filter.
     pub g1: Option<u32>,
@@ -335,13 +356,13 @@ pub async fn get_flows(
         let mut out: Vec<WireFlow> = Vec::with_capacity(limit.min(65536));
         let mut seen_self: HashSet<(u32, u32, u8, u8)> = HashSet::new();
 
-        'outer: for (contig_id, rows) in inner.by_contig.iter() {
+        'outer: for (sequence_id, rows) in inner.rows_by_sequence.iter() {
             if out.len() >= limit { break; }
             if rows.len() < 2 { continue; }
 
-            // Contig filter
+            // Sequence filter
             if let Some(want) = f_qry {
-                if *contig_id != want { continue; }
+                if *sequence_id != want { continue; }
             }
 
             for i in 0..rows.len() {
@@ -382,12 +403,12 @@ pub async fn get_flows(
                     if same_genome {
                         let lo = from_chr.min(to_chr);
                         let hi = from_chr.max(to_chr);
-                        let key = (*contig_id, from_g, lo, hi);
+                        let key = (*sequence_id, from_g, lo, hi);
                         if !seen_self.insert(key) { continue; }
                     }
 
                     out.push(WireFlow {
-                        qry_contig_id: *contig_id,
+                        qry_contig_id: *sequence_id,
                         from_genome: from_g,
                         from_chromosome: from_chr,
                         from_orientation: decode_orientation(inner.orientation[ri]),
@@ -403,35 +424,23 @@ pub async fn get_flows(
 
         out
     });
-    
-    let bytes = match bincode::serialize(&flows) {
-        Ok(b) => b,
-        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
-    };
-    
-    let mut framed = Vec::with_capacity(4 + bytes.len());
-    framed.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
-    framed.extend_from_slice(&bytes);
 
-    Ok((
-        [(header::CONTENT_TYPE, "application/octet-stream")],
-        Body::from(framed),
-    ).into_response())
+    framed_bincode(&flows)
 }
 
 // ---------------------------------------------------------------------------
-// /api/session/:id/contig-locations
+// /api/session/:id/sequence-locations
 // ---------------------------------------------------------------------------
 
-/// Query params for `/contig-locations`.
+/// Query params for `/sequence-locations`.
 #[derive(Debug, Deserialize)]
-pub struct ContigLocationsQuery {
+pub struct SequenceLocationsQuery {
     pub qry: u32,
     pub genomes: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
-pub struct ContigLocation {
+pub struct SequenceLocation {
     pub genome_index: u32,
     pub ref_contig_id: u8,
     pub ref_start_pos: f64,
@@ -439,31 +448,24 @@ pub struct ContigLocation {
 }
 
 #[derive(Debug, Serialize)]
-pub struct ContigLocationsResponse {
+pub struct SequenceLocationsResponse {
     pub qry_contig_id: u32,
-    pub locations: Vec<ContigLocation>,
+    pub locations: Vec<SequenceLocation>,
 }
 
-pub async fn get_contig_locations(
+pub async fn get_sequence_locations(
     State(state): State<Arc<AppState>>,
     AxumPath(session_id): AxumPath<String>,
-    Query(params): Query<ContigLocationsQuery>,
-) -> Result<Json<ContigLocationsResponse>, StatusCode> {
+    Query(params): Query<SequenceLocationsQuery>,
+) -> Result<Json<SequenceLocationsResponse>, StatusCode> {
     let (_uuid, store, file_to_genome) = resolve_session(&state, &session_id)?;
 
     let want = params.qry;
-    let genome_filter: Option<Vec<u32>> = params.genomes.as_deref().and_then(|s| {
-        if s.is_empty() { return None; }
-        let parsed: Vec<u32> = s
-            .split(',')
-            .filter_map(|tok| tok.trim().parse::<u32>().ok())
-            .collect();
-        if parsed.is_empty() { None } else { Some(parsed) }
-    });
-    
+    let genome_filter = parse_genome_csv(params.genomes.as_deref());
+
     let locations = store.with_read(|inner| {
-        let mut out: Vec<ContigLocation> = Vec::new();
-        let Some(rows) = inner.by_contig.get(&want) else { return out; };
+        let mut out: Vec<SequenceLocation> = Vec::new();
+        let Some(rows) = inner.rows_by_sequence.get(&want) else { return out; };
         for &row in rows {
             let ri = row as usize;
             let file_idx = inner.file_index[ri] as usize;
@@ -471,7 +473,7 @@ pub async fn get_contig_locations(
             if let Some(ref g) = genome_filter {
                 if !g.contains(&gi) { continue; }
             }
-            out.push(ContigLocation {
+            out.push(SequenceLocation {
                 genome_index: gi,
                 ref_contig_id: inner.ref_contig_id[ri],
                 ref_start_pos: inner.ref_start_pos[ri],
@@ -481,14 +483,14 @@ pub async fn get_contig_locations(
         out
     });
 
-    Ok(Json(ContigLocationsResponse {
+    Ok(Json(SequenceLocationsResponse {
         qry_contig_id: want,
         locations,
     }))
 }
 
 // ---------------------------------------------------------------------------
-// /api/session/:id/chromosome-records, bincode records for AreaAnalysis
+// /api/session/:id/chromosome-records — bincode records for AreaAnalysis
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
@@ -512,6 +514,7 @@ pub struct WireAreaRecord {
     pub confidence: f64,
     pub ref_len: f64,
 }
+
 #[derive(Debug, Serialize)]
 pub struct ChromosomeRecordsResponse {
     pub chromosome: u8,
@@ -528,21 +531,14 @@ pub async fn get_chromosome_records(
 
     let chr = params.chr;
     let qry_filter = params.qry;
-    let genome_filter: Option<Vec<u32>> = params.genomes.as_deref().and_then(|s| {
-        if s.is_empty() { return None; }
-        let parsed: Vec<u32> = s
-            .split(',')
-            .filter_map(|tok| tok.trim().parse::<u32>().ok())
-            .collect();
-        if parsed.is_empty() { None } else { Some(parsed) }
-    });
-    
+    let genome_filter = parse_genome_csv(params.genomes.as_deref());
+
     let response = store.with_read(|inner| {
         use std::collections::HashSet;
         let mut seen: HashSet<(u32, u64, u64)> = HashSet::new();
         let mut out: Vec<WireAreaRecord> = Vec::new();
         let mut chr_ref_len: f64 = 0.0;
-        
+
         let n = inner.ref_contig_id.len();
         for ri in 0..n {
             if inner.ref_contig_id[ri] != chr { continue; }
@@ -556,7 +552,7 @@ pub async fn get_chromosome_records(
             }
 
             let qry_contig_id = inner.qry_contig_id[ri];
-            
+
             if let Some(q) = qry_filter {
                 if qry_contig_id != q { continue; }
             }
@@ -591,17 +587,6 @@ pub async fn get_chromosome_records(
             records: out,
         }
     });
-    
-    let bytes = match bincode::serialize(&response) {
-        Ok(b) => b,
-        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
-    };
-    let mut framed = Vec::with_capacity(4 + bytes.len());
-    framed.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
-    framed.extend_from_slice(&bytes);
 
-    Ok((
-        [(header::CONTENT_TYPE, "application/octet-stream")],
-        Body::from(framed),
-    ).into_response())
+    framed_bincode(&response)
 }

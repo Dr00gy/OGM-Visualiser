@@ -18,7 +18,7 @@ use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 use crate::xmap::{
-    XmapCache, XmapFileSet, parse_xmap_from_file, parse_refinefinal_from_file,
+    XmapCache, XmapFileSet, parse_xmap_disk, parse_refinefinal,
     hash_file, ChromosomeInfo, RefineFinalRecord, MatchedRecord,
 };
 use crate::store::MatchStore;
@@ -38,11 +38,11 @@ pub struct ProgressFrame {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct CompleteFrame { // For debug, might delete? TODO
+pub struct CompleteFrame {
     pub total_matches: u64,
     pub total_records: u64,
     pub per_genome_records: Vec<u64>,
-    pub distinct_contig_count: u64,
+    pub distinct_sequence_count: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -61,7 +61,7 @@ const JANITOR_INTERVAL: Duration = Duration::from_secs(300);
 
 pub struct Session {
     staging_dir: PathBuf,
-    genome_contig_files: [Vec<PathBuf>; MAX_GENOMES],
+    genome_sequence_files: [Vec<PathBuf>; MAX_GENOMES],
     genome_refinefinal: [Option<PathBuf>; MAX_GENOMES],
     pub last_touched: Instant,
     pub store: Arc<MatchStore>,
@@ -73,7 +73,7 @@ impl Session {
     fn new(staging_dir: PathBuf) -> Self {
         Self {
             staging_dir,
-            genome_contig_files: Default::default(),
+            genome_sequence_files: Default::default(),
             genome_refinefinal: Default::default(),
             last_touched: Instant::now(),
             store: Arc::new(MatchStore::new()),
@@ -279,13 +279,13 @@ pub async fn upload_file(
         if is_refinefinal {
             session.genome_refinefinal[genome_index] = Some(temp_path);
         } else {
-            if session.genome_contig_files[genome_index].len() >= MAX_FILES_PER_GENOME {
+            if session.genome_sequence_files[genome_index].len() >= MAX_FILES_PER_GENOME {
                 eprintln!(
-                    "[api] !!! upload: too many contig files for genome {genome_index} in session {uuid}"
+                    "[api] !!! upload: too many sequence files for genome {genome_index} in session {uuid}"
                 );
                 return Err(StatusCode::BAD_REQUEST);
             }
-            session.genome_contig_files[genome_index].push(temp_path);
+            session.genome_sequence_files[genome_index].push(temp_path);
         }
         session.touch();
     }
@@ -293,7 +293,7 @@ pub async fn upload_file(
     Ok(StatusCode::OK)
 }
 
-pub async fn stream_xmap_matches(
+pub async fn stream_matches(
     State(state): State<Arc<AppState>>,
     AxumPath(session_id): AxumPath<String>,
 ) -> Result<Response<Body>, StatusCode> {
@@ -305,7 +305,7 @@ pub async fn stream_xmap_matches(
         StatusCode::BAD_REQUEST
     })?;
 
-    let (genome_contig_files, mut genome_refinefinal, store_arc) = {
+    let (genome_sequence_files, mut genome_refinefinal, store_arc) = {
         let mut entry = state.sessions.get_mut(&uuid).ok_or_else(|| {
             eprintln!("[api] !!! match: unknown session {uuid}");
             StatusCode::NOT_FOUND
@@ -316,17 +316,17 @@ pub async fn stream_xmap_matches(
             return Err(StatusCode::CONFLICT);
         }
 
-        let contigs: Vec<Vec<PathBuf>> =
-            std::mem::take(&mut entry.genome_contig_files).into_iter().collect();
+        let sequences: Vec<Vec<PathBuf>> =
+            std::mem::take(&mut entry.genome_sequence_files).into_iter().collect();
         let refinefinals: Vec<Option<PathBuf>> =
             std::mem::take(&mut entry.genome_refinefinal).into_iter().collect();
         let store = Arc::clone(&entry.store);
         entry.touch();
-        (contigs, refinefinals, store)
+        (sequences, refinefinals, store)
     };
     eprintln!("[api] [session {uuid}] files extracted for match phase");
 
-    let populated_genomes: Vec<usize> = genome_contig_files
+    let populated_genomes: Vec<usize> = genome_sequence_files
         .iter()
         .enumerate()
         .filter(|(_, files)| !files.is_empty())
@@ -334,9 +334,9 @@ pub async fn stream_xmap_matches(
         .collect();
 
     eprintln!(
-        "[api] [phase2] populated genomes: {:?} (contig counts: {:?})",
+        "[api] [phase2] populated genomes: {:?} (sequence counts: {:?})",
         populated_genomes,
-        genome_contig_files.iter().map(|v| v.len()).collect::<Vec<_>>()
+        genome_sequence_files.iter().map(|v| v.len()).collect::<Vec<_>>()
     );
 
     if populated_genomes.len() < 2 {
@@ -364,7 +364,7 @@ pub async fn stream_xmap_matches(
         eprintln!("[api] [phase3] genome {gi}: parsing refineFinal at {rf_path_clone:?}");
 
         let (lookup, chr_lengths) = tokio::task::spawn_blocking(move || {
-            parse_refinefinal_from_file(&rf_path_clone)
+            parse_refinefinal(&rf_path_clone)
         })
             .await
             .map_err(|e| {
@@ -395,11 +395,11 @@ pub async fn stream_xmap_matches(
     eprintln!("[api] [phase3] DONE in {:?}", phase3_start.elapsed());
 
     let phase4_start = Instant::now();
-    let total_contig_files: usize = populated_genomes
+    let total_sequence_files: usize = populated_genomes
         .iter()
-        .map(|&gi| genome_contig_files[gi].len())
+        .map(|&gi| genome_sequence_files[gi].len())
         .sum();
-    eprintln!("[api] [phase4] parsing {total_contig_files} contig files");
+    eprintln!("[api] [phase4] parsing {total_sequence_files} sequence files");
 
     let mut all_file_records = Vec::new();
     let mut all_file_hashes  = Vec::new();
@@ -407,14 +407,14 @@ pub async fn stream_xmap_matches(
     let mut flat_idx = 0usize;
 
     for (genome_order_idx, &gi) in populated_genomes.iter().enumerate() {
-        let files = &genome_contig_files[gi];
+        let files = &genome_sequence_files[gi];
 
         for temp_path in files {
             let file_start = Instant::now();
             eprintln!(
                 "[api] [phase4] file {}/{} (genome {gi}, flat_idx {flat_idx}): hashing {temp_path:?}",
                 flat_idx + 1,
-                total_contig_files
+                total_sequence_files
             );
 
             let hash = {
@@ -434,7 +434,7 @@ pub async fn stream_xmap_matches(
             eprintln!(
                 "[api] [phase4] file {}/{}: hashed (hash={hash}) in {:?}",
                 flat_idx + 1,
-                total_contig_files,
+                total_sequence_files,
                 file_start.elapsed()
             );
 
@@ -444,19 +444,19 @@ pub async fn stream_xmap_matches(
                     eprintln!(
                         "[api] [phase4] file {}/{}: CACHE HIT",
                         flat_idx + 1,
-                        total_contig_files
+                        total_sequence_files
                     );
                     Arc::clone(r.value())
                 } else {
                     eprintln!(
                         "[api] [phase4] file {}/{}: CACHE MISS, parsing...",
                         flat_idx + 1,
-                        total_contig_files
+                        total_sequence_files
                     );
                     let cache_clone = Arc::clone(&state.cache);
                     let path_clone  = temp_path.clone();
                     let (recs, _chr) = tokio::task::spawn_blocking(move || {
-                        parse_xmap_from_file(&path_clone, hash, &cache_clone)
+                        parse_xmap_disk(&path_clone, hash, &cache_clone)
                     })
                         .await
                         .map_err(|e| {
@@ -464,7 +464,7 @@ pub async fn stream_xmap_matches(
                             StatusCode::INTERNAL_SERVER_ERROR
                         })?
                         .map_err(|e| {
-                            eprintln!("[api] !!! parse_xmap_from_file error: {e:?}");
+                            eprintln!("[api] !!! parse_xmap_disk error: {e:?}");
                             StatusCode::BAD_REQUEST
                         })?;
                     recs
@@ -473,7 +473,7 @@ pub async fn stream_xmap_matches(
             eprintln!(
                 "[api] [phase4] file {}/{}: parsed in {:?} ({} records)",
                 flat_idx + 1,
-                total_contig_files,
+                total_sequence_files,
                 parse_start.elapsed(),
                 records.len()
             );
@@ -581,7 +581,7 @@ pub async fn stream_xmap_matches(
             .and_then(|s| s.file_to_genome.clone())
             .unwrap_or_default();
 
-        let rx = crate::xmap::stream_matches_multi_chunked(fileset, MAX_RECORDS_PER_CHUNK);
+        let rx = crate::xmap::stream_matches_chunked(fileset, MAX_RECORDS_PER_CHUNK);
         let (bridge_tx, mut bridge_rx) =
             tokio::sync::mpsc::channel::<crate::xmap::RecordChunk>(256);
 
@@ -642,8 +642,8 @@ pub async fn stream_xmap_matches(
                                 qry, &done.file_indices, &done.records, &file_to_genome_slice);
                         }
                     }
-                    
-                    let snap = store_for_task.progress_snapshot();
+
+                    let snap = store_for_task.snapshot();
                     if writer_alive
                         && snap.total_matches - last_progress_matches >= PROGRESS_EVERY_N_MATCHES
                     {
@@ -659,10 +659,10 @@ pub async fn stream_xmap_matches(
                         last_progress_matches = snap.total_matches;
                     }
                 }
-                
+
                 _ = progress_ticker.tick() => {
                     if writer_alive {
-                        let snap = store_for_task.progress_snapshot();
+                        let snap = store_for_task.snapshot();
                         let pf = StreamFrame::Progress(ProgressFrame {
                             total_matches: snap.total_matches,
                             total_records: snap.total_records,
@@ -693,7 +693,7 @@ pub async fn stream_xmap_matches(
         );
 
         if writer_alive {
-            let snap = store_for_task.progress_snapshot();
+            let snap = store_for_task.snapshot();
             let pf = StreamFrame::Progress(ProgressFrame {
                 total_matches: snap.total_matches,
                 total_records: snap.total_records,
@@ -706,13 +706,13 @@ pub async fn stream_xmap_matches(
 
         // --- Final frame: Complete ---
         if writer_alive {
-            let snap = store_for_task.progress_snapshot();
-            let distinct = store_for_task.distinct_contig_count() as u64;
+            let snap = store_for_task.snapshot();
+            let distinct = store_for_task.distinct_sequence_count() as u64;
             let cf = StreamFrame::Complete(CompleteFrame {
                 total_matches: snap.total_matches,
                 total_records: snap.total_records,
                 per_genome_records: snap.per_genome_records,
-                distinct_contig_count: distinct,
+                distinct_sequence_count: distinct,
             });
             if !send_frame(&mut writer, &cf).await {
                 eprintln!("[api] [stream {uuid}] client disconnected before Complete frame");
@@ -746,7 +746,7 @@ pub async fn stream_xmap_matches(
 
         let snap = sessions_for_task
             .get(&uuid)
-            .map(|e| e.store.progress_snapshot());
+            .map(|e| e.store.snapshot());
         if let Some(snap) = snap {
             eprintln!(
                 "[api] [stream {uuid}] DONE: {} matches / {} records ingested in {:?} (total request {:?})",
@@ -776,6 +776,12 @@ pub async fn stream_xmap_matches(
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Parse the multipart field name, which encodes the genome index and file kind.
+///
+/// Form: `g{genome_index}_r` for the refineFinal file, or
+/// `g{genome_index}_s{seq_index}` for an individual sequence (xmap) file.
+///
+/// Returns `(genome_index, is_refinefinal)` on success.
 fn parse_field_name(field_name: &str) -> Option<(usize, bool)> {
     let s          = field_name.strip_prefix('g')?;
     let underscore = s.find('_')?;
@@ -784,7 +790,7 @@ fn parse_field_name(field_name: &str) -> Option<(usize, bool)> {
 
     if suffix == "r" {
         Some((genome_index, true))
-    } else if let Some(rest) = suffix.strip_prefix('c') {
+    } else if let Some(rest) = suffix.strip_prefix('s') {
         if rest.parse::<usize>().is_ok() {
             Some((genome_index, false))
         } else {
@@ -806,9 +812,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_field_name_contig() {
-        assert_eq!(parse_field_name("g0_c0"),  Some((0, false)));
-        assert_eq!(parse_field_name("g1_c42"), Some((1, false)));
+    fn parse_field_name_sequence() {
+        assert_eq!(parse_field_name("g0_s0"),  Some((0, false)));
+        assert_eq!(parse_field_name("g1_s42"), Some((1, false)));
     }
 
     #[test]
@@ -817,7 +823,9 @@ mod tests {
         assert_eq!(parse_field_name("g"), None);
         assert_eq!(parse_field_name("gX_r"), None);
         assert_eq!(parse_field_name("g0_x"), None);
-        assert_eq!(parse_field_name("g0_cX"), None);
+        assert_eq!(parse_field_name("g0_sX"), None);
         assert_eq!(parse_field_name("0_r"), None);
+        // Old "c" prefix is no longer accepted.
+        assert_eq!(parse_field_name("g0_c0"), None);
     }
 }

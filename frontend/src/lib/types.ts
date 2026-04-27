@@ -5,7 +5,8 @@ export interface FileData {
 }
 
 // ---------------------------------------------------------------------------
-// Wire-format records (mirror of bincodeDecoder equivalents)
+// Wire-format records (mirror of bincodeDecoder equivalents).
+// Field names match the BE Rust serialization byte-for-byte / key-for-key.
 // ---------------------------------------------------------------------------
 
 export interface MatchedRecord {
@@ -27,48 +28,48 @@ export interface BackendMatch {
 }
 
 // ---------------------------------------------------------------------------
-// Donut-chart geometry types (derived from the above)
+// Donut-chart geometry types (FE-only, derived from the above)
 // ---------------------------------------------------------------------------
 
-export interface DonutSegment {
+export interface DonutSeg {
   name: string;
   rows: number;
   color: string;
-  index: number;
-  genomeSize: number;
+  idx: number;
+  genSize: number;
   dashArray: string;
   dashOffset: number;
-  percentage: string;
+  pct: string;
   showLabel: boolean;
-  showChromosomes: boolean;
-  startAngle: number;
-  endAngle: number;
-  angleRange: number;
+  showChrs: boolean;
+  startAng: number;
+  endAng: number;
+  angRange: number;
 }
 
 export interface FlowPath {
   path: string;
   p1: { x: number; y: number };
   p2: { x: number; y: number };
-  fromOrientation: string;
-  toOrientation: string;
+  fromOri: string;
+  toOri: string;
   color: string;
   opacity: number;
   width: number;
-  fromChromosome: number;
-  toChromosome: number;
-  confidence: number;
-  fromFileIndex: number;
-  toFileIndex: number;
-  isSameGenome: boolean;
+  fromChr: number;
+  toChr: number;
+  conf: number;
+  fromFileIdx: number;
+  toFileIdx: number;
+  isSameGen: boolean;
   qryContigId: number;
-  fromRecord: MatchedRecord;
-  toRecord: MatchedRecord;
+  fromRec: MatchedRecord;
+  toRec: MatchedRecord;
 }
 
-export interface ChromosomeDivision {
-  chromosome: number;
-  startAngle: number;
-  endAngle: number;
-  midAngle: number;
+export interface ChrDivision {
+  chr: number;
+  startAng: number;
+  endAng: number;
+  midAng: number;
 }

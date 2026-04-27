@@ -2,26 +2,26 @@ import { writable } from 'svelte/store';
 
 interface SearchState {
   /** Text typed into the donut overview list's search box. */
-  overviewSearchQuery: string;
+  ovQry: string;
   /** Text typed into the donut match-table's search box. */
-  matchesSearchQuery: string;
+  mtcQry: string;
   /** Text typed into the area-analysis tab's search box. */
-  areaSearchQuery: string;
+  areaQry: string;
   /** Which field the overview search is being applied to. */
-  overviewSearchType: 'contig' | 'chromosome' | 'confidence';
+  ovType: 'sequence' | 'chromosome' | 'confidence';
   /** Which field the match-table search is being applied to. */
-  matchesSearchType: 'contig' | 'chromosome' | 'confidence';
+  mtcType: 'sequence' | 'chromosome' | 'confidence';
 }
 
-const initialState: SearchState = {
-  overviewSearchQuery: '',
-  matchesSearchQuery: '',
-  areaSearchQuery: '',
-  overviewSearchType: 'contig',
-  matchesSearchType: 'contig'
+const initSt: SearchState = {
+  ovQry: '',
+  mtcQry: '',
+  areaQry: '',
+  ovType: 'sequence',
+  mtcType: 'sequence'
 };
 
-export const searchStore = writable<SearchState>(initialState);
+export const searchStore = writable<SearchState>(initSt);
 export function resetSearchStore() {
-  searchStore.set(initialState);
+  searchStore.set(initSt);
 }

@@ -11,23 +11,23 @@
   import D3DonutChart from './D3DonutChart.svelte';
 
   export let files: FileData[] = [];
-  export let fileToGenome: number[] = [];
+  export let fileToGen: number[] = [];
   export let matches: BackendMatch[] = [];
-  export let chromosomeInfo: ChromosomeInfo[][] = [];
+  export let chrInfo: ChromosomeInfo[][] = [];
 
-  export let showDuplicates = false;
+  export let showDups = false;
   export let isStreaming = false;
-  export let sessionId: string | null = null;
+  export let sessId: string | null = null;
   export let isQueryable: boolean = false;
 </script>
 
 <D3DonutChart
   {files}
-  {fileToGenome}
+  {fileToGen}
   {matches}
-  {chromosomeInfo}
-  {showDuplicates}
+  {chrInfo}
+  {showDups}
   {isStreaming}
-  {sessionId}
+  {sessId}
   {isQueryable}
 />

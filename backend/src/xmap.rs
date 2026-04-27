@@ -61,7 +61,7 @@ pub struct RefineFinalRecord {
 // refineFinal parser
 // ---------------------------------------------------------------------------
 
-pub fn parse_refinefinal_from_file(
+pub fn parse_refinefinal(
     path: &Path,
 ) -> Result<(
     std::collections::HashMap<u32, Vec<RefineFinalRecord>>,
@@ -165,7 +165,7 @@ pub struct MatchedRecord {
 }
 
 // ---------------------------------------------------------------------------
-// Contig-file parsers (three variants, all equivalent in result)
+// XMAP file parsers
 // ---------------------------------------------------------------------------
 
 /// Streaming parser that reads from an in-memory `Bytes` buffer.
@@ -253,7 +253,9 @@ pub fn parse_xmap_streaming(
     Ok((records_arc, chr_lengths_arc))
 }
 
-pub fn parse_xmap_file(content: &str) -> Result<(Arc<RecordVec>, Arc<RefLenMap>), String> {
+/// Parse from an in-memory string. Unlike [`parse_xmap_streaming`] / [`parse_xmap_disk`]
+/// this variant does NOT touch the cache — it's used by tests and ad-hoc string input.
+pub fn parse_xmap_string(content: &str) -> Result<(Arc<RecordVec>, Arc<RefLenMap>), String> {
     let mut records: RecordVec = Vec::new();
     let mut chromosome_lengths: RefLenMap = FxHashMap::default();
 
@@ -319,7 +321,7 @@ pub struct XmapFileSet {
     /// flat_file_index to genome_index. Mirrors the frontend's `fileToGenome` array.
     pub file_to_genome: Box<[usize]>,
     /// genome_index to refineFinal lookup (keyed by `qry_contig_id`).
-    pub refinefinal_lookups: Box<[Arc<std::collections::HashMap<u32, Vec<RefineFinalRecord>>>]>,
+    pub refinefinal: Box<[Arc<std::collections::HashMap<u32, Vec<RefineFinalRecord>>>]>,
 }
 
 impl XmapFileSet {
@@ -327,11 +329,11 @@ impl XmapFileSet {
         files: Box<[Arc<RecordVec>]>,
         indices: Box<[Arc<QryIndex>]>,
         file_to_genome: Box<[usize]>,
-        refinefinal_lookups: Box<[Arc<std::collections::HashMap<u32, Vec<RefineFinalRecord>>>]>,
+        refinefinal: Box<[Arc<std::collections::HashMap<u32, Vec<RefineFinalRecord>>>]>,
     ) -> Self {
         debug_assert_eq!(files.len(), indices.len(),
                          "files and indices must be parallel arrays");
-        Self { files, indices, file_to_genome, refinefinal_lookups }
+        Self { files, indices, file_to_genome, refinefinal }
     }
 
     pub fn len(&self) -> usize {
@@ -343,7 +345,7 @@ impl XmapFileSet {
 // The matcher itself
 // ---------------------------------------------------------------------------
 
-pub fn stream_matches_multi_chunked(
+pub fn stream_matches_chunked(
     fileset: Arc<XmapFileSet>,
     max_records_per_chunk: usize,
 ) -> channel::Receiver<RecordChunk> {
@@ -353,27 +355,27 @@ pub fn stream_matches_multi_chunked(
         return rx;
     }
 
-    let mut global_groups: FxHashMap<u32, Vec<(usize, u32)>> = FxHashMap::default();
+    let mut groups: FxHashMap<u32, Vec<(usize, u32)>> = FxHashMap::default();
 
     for (file_idx, file_records) in fileset.files.iter().enumerate() {
         for (record_idx, record) in file_records.iter().enumerate() {
-            global_groups
+            groups
                 .entry(record.qry_contig_id)
                 .or_default()
                 .push((file_idx, record_idx as u32));
         }
     }
 
-    let num_genomes = fileset.refinefinal_lookups.len();
+    let n_genomes = fileset.refinefinal.len();
     let queue: Arc<SegQueue<u32>> = Arc::new(SegQueue::new());
-    for (&qry_id, records) in global_groups.iter() {
+    for (&qry_id, records) in groups.iter() {
         let first_file = records[0].0;
         if !records.iter().any(|(fi, _)| *fi != first_file) {
             continue;
         }
 
-        let in_all = (0..num_genomes).all(|gi| {
-            fileset.refinefinal_lookups
+        let in_all = (0..n_genomes).all(|gi| {
+            fileset.refinefinal
                 .get(gi)
                 .map_or(false, |lut| lut.contains_key(&qry_id))
         });
@@ -383,19 +385,19 @@ pub fn stream_matches_multi_chunked(
         queue.push(qry_id);
     }
 
-    let global_groups = Arc::new(global_groups);
+    let groups = Arc::new(groups);
     let n_threads = num_cpus::get();
     rayon::scope(|s| {
         for _ in 0..n_threads {
             // Per-thread clones of shared handles. `Arc::clone` is cheap.
-            let queue            = Arc::clone(&queue);
-            let global_groups    = Arc::clone(&global_groups);
-            let tx               = tx.clone();
-            let fileset          = Arc::clone(&fileset);
+            let queue   = Arc::clone(&queue);
+            let groups  = Arc::clone(&groups);
+            let tx      = tx.clone();
+            let fileset = Arc::clone(&fileset);
 
             s.spawn(move |_| {
                 while let Some(qry_id) = queue.pop() {
-                    let Some(all_records) = global_groups.get(&qry_id) else {
+                    let Some(all_records) = groups.get(&qry_id) else {
                         continue;
                     };
                     let matched_indices: Vec<usize> =
@@ -404,8 +406,8 @@ pub fn stream_matches_multi_chunked(
                     let matched_records: Vec<MatchedRecord> = all_records
                         .iter()
                         .flat_map(|(fi, _ri)| {
-                            let genome_idx = fileset.file_to_genome.get(*fi).copied().unwrap_or(0);
-                            let rf_recs = &fileset.refinefinal_lookups[genome_idx][&qry_id];
+                            let gi = fileset.file_to_genome.get(*fi).copied().unwrap_or(0);
+                            let rf_recs = &fileset.refinefinal[gi][&qry_id];
                             rf_recs.iter().map(move |rf_rec| MatchedRecord {
                                 file_index:    *fi,
                                 ref_contig_id: rf_rec.chromosome,
@@ -457,7 +459,7 @@ pub fn stream_matches_multi_chunked(
 // Disk-backed parser
 // ---------------------------------------------------------------------------
 
-pub fn parse_xmap_from_file(
+pub fn parse_xmap_disk(
     path: &Path,
     hash: u64,
     cache: &XmapCache,
@@ -540,6 +542,18 @@ pub fn hash_file(path: &Path) -> Result<u64, std::io::Error> {
     Ok(hasher.finish())
 }
 
+pub fn hash_content(content: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    content.hash(&mut hasher);
+    hasher.finish()
+}
+
+pub fn hash_bytes(bytes: &Bytes) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
+}
+
 // ---------------------------------------------------------------------------
 // Cache
 // ---------------------------------------------------------------------------
@@ -574,18 +588,6 @@ impl XmapCache {
     }
 }
 
-pub fn hash_content(content: &str) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    content.hash(&mut hasher);
-    hasher.finish()
-}
-
-pub fn hash_content_streaming(bytes: &Bytes) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    bytes.hash(&mut hasher);
-    hasher.finish()
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -594,7 +596,7 @@ pub fn hash_content_streaming(bytes: &Bytes) -> u64 {
 mod tests {
     use super::*;
 
-    /// A tiny XMAP fixture covering: two query contigs, two chromosomes,
+    /// A tiny XMAP fixture covering: two query sequences, two chromosomes,
     /// both orientations, and a mix of integer/float fields. Enough to
     /// exercise every field parser.
     fn sample_xmap_content() -> &'static str {
@@ -608,8 +610,8 @@ mod tests {
     /// Verifies the sequential string parser: record count, chromosome count,
     /// and that every typed field round-trips correctly.
     #[test]
-    fn test_parse_xmap_file() {
-        let (records, chr_lengths) = parse_xmap_file(sample_xmap_content()).unwrap();
+    fn test_parse_xmap_string() {
+        let (records, chr_lengths) = parse_xmap_string(sample_xmap_content()).unwrap();
         assert_eq!(records.len(), 3);
         assert_eq!(chr_lengths.len(), 2);
 
@@ -631,7 +633,7 @@ mod tests {
         let content = sample_xmap_content();
         let bytes = Bytes::from(content.to_string());
         let cache = XmapCache::new();
-        let hash = hash_content_streaming(&bytes);
+        let hash = hash_bytes(&bytes);
 
         let (records, chr_lengths) = parse_xmap_streaming(&bytes, hash, &cache).unwrap();
         assert_eq!(records.len(), 3);
@@ -647,23 +649,23 @@ mod tests {
     }
 
     /// The fixture has two distinct `qry_contig_id`s, so the index must
-    /// have two buckets; contig 4881976 appears twice so its bucket has
+    /// have two buckets; sequence 4881976 appears twice so its bucket has
     /// two entries.
     #[test]
     fn test_build_index() {
-        let (records, _) = parse_xmap_file(sample_xmap_content()).unwrap();
+        let (records, _) = parse_xmap_string(sample_xmap_content()).unwrap();
         let index = build_index(&records);
         assert_eq!(index.len(), 2);
 
-        let indices_for_contig = index.get(&4881976).unwrap();
-        assert_eq!(indices_for_contig.len(), 2);
+        let indices_for_sequence = index.get(&4881976).unwrap();
+        assert_eq!(indices_for_sequence.len(), 2);
     }
 
-    /// End-to-end matcher test: two fixture files that share query contigs
+    /// End-to-end matcher test: two fixture files that share query sequences
     /// 100 and 200. Each match has at most one record per file so every
     /// chunk has `total_chunks=1`.
     #[test]
-    fn test_stream_matches_multi_chunked() {
+    fn test_stream_matches_chunked() {
         let file1_content = r#"#h XmapEntryID	QryContigID	RefContigID	QryStartPos	QryEndPos	RefStartPos	RefEndPos	Orientation	Confidence	HitEnum	QryLen	RefLen
 1	100	1	1000.0	2000.0	5000.0	6000.0	+	15.0	1M	2000.0	250000.0
 2	200	2	3000.0	4000.0	7000.0	8000.0	-	14.5	1M	4000.0	250000.0"#;
@@ -672,8 +674,8 @@ mod tests {
 10	100	3	1500.0	2500.0	9000.0	10000.0	+	16.0	1M	2500.0	250000.0
 11	200	4	3500.0	4500.0	11000.0	12000.0	-	15.5	1M	4500.0	250000.0"#;
 
-        let (file1_records, _) = parse_xmap_file(file1_content).unwrap();
-        let (file2_records, _) = parse_xmap_file(file2_content).unwrap();
+        let (file1_records, _) = parse_xmap_string(file1_content).unwrap();
+        let (file2_records, _) = parse_xmap_string(file2_content).unwrap();
         let idx1 = build_index(&file1_records);
         let idx2 = build_index(&file2_records);
 
@@ -707,7 +709,7 @@ mod tests {
             vec![Arc::clone(&rf_arc), Arc::clone(&rf_arc)].into_boxed_slice(),
         ));
 
-        let rx = stream_matches_multi_chunked(fileset, 50);
+        let rx = stream_matches_chunked(fileset, 50);
         let mut chunk_count = 0;
         while let Ok(chunk) = rx.recv() {
             chunk_count += 1;
@@ -726,7 +728,7 @@ mod tests_disk {
     /// Round-trips a small XMAP fixture through a real temp file to make
     /// sure the disk path produces identical results to the string path.
     #[test]
-    fn test_parse_xmap_from_file() {
+    fn test_parse_xmap_disk() {
         let mut temp = tempfile::NamedTempFile::new().unwrap();
         let content = r#"# hostname=test
 #h XmapEntryID	QryContigID	RefContigID	QryStartPos	QryEndPos	RefStartPos	RefEndPos	Orientation	Confidence	HitEnum	QryLen	RefLen
@@ -737,7 +739,7 @@ mod tests_disk {
 
         let cache = XmapCache::new();
         let hash = 12345u64;
-        let (records, chr_lengths) = parse_xmap_from_file(temp.path(), hash, &cache).unwrap();
+        let (records, chr_lengths) = parse_xmap_disk(temp.path(), hash, &cache).unwrap();
         assert_eq!(records.len(), 2);
         assert_eq!(chr_lengths.len(), 1);
 

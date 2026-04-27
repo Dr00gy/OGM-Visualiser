@@ -1,5 +1,6 @@
 // ---------------------------------------------------------------------------
-// Server-side types (mirror query.rs)
+// Server-side types (mirror query.rs).
+// JSON keys are wire fields and must stay exact. Interface NAMES are FE-only.
 // ---------------------------------------------------------------------------
 
 export interface ChromosomeCount {
@@ -8,7 +9,7 @@ export interface ChromosomeCount {
   count: number;
 }
 
-export interface ContigAggregate {
+export interface SequenceAggregate {
   qry_contig_id: number;
   total_occurrences: number;
   per_genome: number[];
@@ -18,7 +19,7 @@ export interface ContigAggregate {
 
 export interface MetaResponse {
   max_confidence: number;
-  available_contig_ids: number[];
+  available_sequence_ids: number[];
   file_to_genome: number[];
   total_matches: number;
   total_records: number;
@@ -43,9 +44,9 @@ export interface MatchedRecordWire {
   ref_len: number;
 }
 
-export interface ContigsPage {
+export interface SeqsPage {
   total: number;
-  items: ContigAggregate[];
+  items: SequenceAggregate[];
 }
 
 export interface MatchesPage {
@@ -53,7 +54,7 @@ export interface MatchesPage {
   items: MatchEntry[];
 }
 
-export type SearchType = 'contig' | 'chromosome' | 'confidence';
+export type SearchType = 'sequence' | 'chromosome' | 'confidence';
 
 // ---------------------------------------------------------------------------
 // Base URL + fetch helpers
@@ -65,9 +66,9 @@ export class QueryError extends Error {
   constructor(
     public status: number,
     public statusText: string,
-    message?: string,
+    msg?: string,
   ) {
-    super(message ?? `${status} ${statusText}`);
+    super(msg ?? `${status} ${statusText}`);
     this.name = 'QueryError';
   }
 }
@@ -129,14 +130,14 @@ function qs(params: Record<string, string | number | boolean | undefined | null>
 // ---------------------------------------------------------------------------
 
 export function fetchMeta(
-  sessionId: string,
+  sessId: string,
   signal?: AbortSignal,
 ): Promise<MetaResponse | undefined> {
-  return fetchJSON<MetaResponse>(`${BASE}/api/session/${sessionId}/meta`, signal);
+  return fetchJSON<MetaResponse>(`${BASE}/api/session/${sessId}/meta`, signal);
 }
 
-export function fetchContigs(
-  sessionId: string,
+export function fetchSeqs(
+  sessId: string,
   opts: {
     q?: string;
     searchType?: SearchType;
@@ -144,18 +145,18 @@ export function fetchContigs(
     perPage?: number;
     signal?: AbortSignal;
   } = {},
-): Promise<ContigsPage | undefined> {
-  const url = `${BASE}/api/session/${sessionId}/contigs${qs({
+): Promise<SeqsPage | undefined> {
+  const url = `${BASE}/api/session/${sessId}/sequences${qs({
     q: opts.q,
     search_type: opts.searchType,
     page: opts.page,
     per_page: opts.perPage,
   })}`;
-  return fetchJSON<ContigsPage>(url, opts.signal);
+  return fetchJSON<SeqsPage>(url, opts.signal);
 }
 
 export function fetchMatchesPage(
-  sessionId: string,
+  sessId: string,
   opts: {
     q?: string;
     searchType?: SearchType;
@@ -164,7 +165,7 @@ export function fetchMatchesPage(
     signal?: AbortSignal;
   } = {},
 ): Promise<MatchesPage | undefined> {
-  const url = `${BASE}/api/session/${sessionId}/matches${qs({
+  const url = `${BASE}/api/session/${sessId}/matches${qs({
     q: opts.q,
     search_type: opts.searchType,
     page: opts.page,
@@ -190,34 +191,33 @@ export interface WireFlow {
 }
 
 export async function fetchFlows(
-  sessionId: string,
+  sessId: string,
   opts: {
     qry?: number;
     g1?: number;
     g2?: number;
     chr?: number;
-    chrGenome?: number;
-    showDuplicates?: boolean;
+    chrGen?: number;
+    showDups?: boolean;
     limit?: number;
     signal?: AbortSignal;
   } = {},
 ): Promise<WireFlow[] | undefined> {
-  const url = `${BASE}/api/session/${sessionId}/flows${qs({
+  const url = `${BASE}/api/session/${sessId}/flows${qs({
     qry: opts.qry,
     g1: opts.g1,
     g2: opts.g2,
     chr: opts.chr,
-    chr_genome: opts.chrGenome,
-    show_duplicates: opts.showDuplicates,
+    chr_genome: opts.chrGen,
+    show_duplicates: opts.showDups,
     limit: opts.limit,
   })}`;
   const bytes = await fetchBincode(url, opts.signal);
   if (!bytes) return undefined;
-  return decodeFlows(bytes);
+  return decFlows(bytes);
 }
 
 /**
- * 
  * bincode layout:
  *   [u64 LE vec length]
  *   then for each element, fields in declaration order:
@@ -230,9 +230,8 @@ export async function fetchFlows(
  *     to_chromosome     u8
  *     to_orientation    char
  *     to_confidence     f64
- *
  */
-function decodeFlows(bytes: Uint8Array): WireFlow[] {
+function decFlows(bytes: Uint8Array): WireFlow[] {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let pos = 0;
 
@@ -310,60 +309,59 @@ export interface WireAreaRecord {
   ref_len: number;
 }
 
-export interface ChromosomeRecordsResponse {
+export interface ChrRecsResponse {
   chromosome: number;
   chromosome_ref_len: number;
   records: WireAreaRecord[];
 }
 
-export async function fetchChromosomeRecords(
-  sessionId: string,
+export async function fetchChrRecs(
+  sessId: string,
   opts: {
     genomes?: number[];
     chr: number;
     qry?: number;
     signal?: AbortSignal;
   },
-): Promise<ChromosomeRecordsResponse | undefined> {
-  const url = `${BASE}/api/session/${sessionId}/chromosome-records${qs({
+): Promise<ChrRecsResponse | undefined> {
+  const url = `${BASE}/api/session/${sessId}/chromosome-records${qs({
     genomes: opts.genomes && opts.genomes.length > 0 ? opts.genomes.join(',') : undefined,
     chr: opts.chr,
     qry: opts.qry,
   })}`;
   const bytes = await fetchBincode(url, opts.signal);
   if (!bytes) return undefined;
-  return decodeChromosomeRecords(bytes);
+  return decChrRecs(bytes);
 }
 
-export interface ContigLocation {
+export interface SeqLocation {
   genome_index: number;
   ref_contig_id: number;
   ref_start_pos: number;
   ref_end_pos: number;
 }
 
-export interface ContigLocationsResponse {
+export interface SeqLocationsResp {
   qry_contig_id: number;
-  locations: ContigLocation[];
+  locations: SeqLocation[];
 }
 
-export async function fetchContigLocations(
-  sessionId: string,
+export async function fetchSeqLocations(
+  sessId: string,
   opts: {
     qry: number;
     genomes?: number[];
     signal?: AbortSignal;
   },
-): Promise<ContigLocationsResponse | undefined> {
-  const url = `${BASE}/api/session/${sessionId}/contig-locations${qs({
+): Promise<SeqLocationsResp | undefined> {
+  const url = `${BASE}/api/session/${sessId}/sequence-locations${qs({
     qry: opts.qry,
     genomes: opts.genomes && opts.genomes.length > 0 ? opts.genomes.join(',') : undefined,
   })}`;
-  return fetchJSON<ContigLocationsResponse>(url, opts.signal);
+  return fetchJSON<SeqLocationsResp>(url, opts.signal);
 }
 
 /**
- * 
  * Wire layout:
  *   chromosome          u8
  *   chromosome_ref_len  f64
@@ -381,7 +379,7 @@ export async function fetchContigLocations(
  *     confidence      f64
  *     ref_len         f64
  */
-function decodeChromosomeRecords(bytes: Uint8Array): ChromosomeRecordsResponse {
+function decChrRecs(bytes: Uint8Array): ChrRecsResponse {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let pos = 0;
 

@@ -1,13 +1,13 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import type { FileData, DonutSegment, MatchedRecord } from '$lib/types';
+  import type { FileData, DonutSeg, MatchedRecord } from '$lib/types';
   import { searchStore } from '$lib/searchStore';
-  import ContigPicker from './ContigPicker.svelte';
+  import SeqPicker from './SeqPicker.svelte';
   import {
-    fetchContigs,
+    fetchSeqs,
     fetchMatchesPage,
     makeDebouncer,
-    type ContigAggregate,
+    type SequenceAggregate,
     type MatchEntry,
     type SearchType,
   } from '$lib/queryClient';
@@ -17,26 +17,26 @@
   // -------------------------------------------------------------------------
 
   export let files: FileData[] = [];
-  export let fileToGenome: number[] = [];
-  export let segments: DonutSegment[] = [];
-  export let genomeSizes: Map<number, number> = new Map();
-  export let totalGenomeSize = 0;
-  export let filteredFlowPaths: any[] = [];
-  export let showDuplicates = false;
+  export let fileToGen: number[] = [];
+  export let segments: DonutSeg[] = [];
+  export let genSizes: Map<number, number> = new Map();
+  export let totGenSize = 0;
+  export let fltFlowPaths: any[] = [];
+  export let showDups = false;
 
-  export let selectedQueryContigId = '';
-  export let selectedGenome1 = '';
-  export let selectedGenome2 = '';
-  export let selectedChromosome = '';
-  export let selectedGenomeForChromosome = '';
+  export let selSeqId = '';
+  export let selGen1 = '';
+  export let selGen2 = '';
+  export let selChr = '';
+  export let selGenForChr = '';
 
-  export let availableQueryContigIds: number[] = [];
-  export let availableGenomes: { value: string; label: string; color: string }[] = [];
-  export let availableChromosomes: string[] = [];
-  export let clearAllFilters: () => void = () => {};
+  export let availSeqIds: number[] = [];
+  export let availGens: { value: string; label: string; color: string }[] = [];
+  export let availChrs: string[] = [];
+  export let clearAllFlts: () => void = () => {};
 
 
-  export let sessionId: string | null = null;
+  export let sessId: string | null = null;
 
   export let isQueryable: boolean = false;
 
@@ -44,75 +44,75 @@
   // Search state (from global store)
   // -------------------------------------------------------------------------
 
-  let overviewSearchQuery = '';
-  let matchesSearchQuery = '';
-  let overviewSearchType: SearchType = 'contig';
-  let matchesSearchType: SearchType = 'contig';
+  let ovQry = '';
+  let mtcQry = '';
+  let ovType: SearchType = 'sequence';
+  let mtcType: SearchType = 'sequence';
 
-  const unsubscribe = searchStore.subscribe(state => {
-    overviewSearchQuery = state.overviewSearchQuery;
-    matchesSearchQuery  = state.matchesSearchQuery;
-    overviewSearchType  = state.overviewSearchType;
-    matchesSearchType   = state.matchesSearchType;
+  const unsub = searchStore.subscribe(state => {
+    ovQry  = state.ovQry;
+    mtcQry = state.mtcQry;
+    ovType = state.ovType;
+    mtcType = state.mtcType;
   });
 
-  $: if (overviewSearchQuery !== $searchStore.overviewSearchQuery) {
-    searchStore.update(state => ({ ...state, overviewSearchQuery }));
+  $: if (ovQry !== $searchStore.ovQry) {
+    searchStore.update(state => ({ ...state, ovQry }));
   }
-  $: if (matchesSearchQuery !== $searchStore.matchesSearchQuery) {
-    searchStore.update(state => ({ ...state, matchesSearchQuery }));
+  $: if (mtcQry !== $searchStore.mtcQry) {
+    searchStore.update(state => ({ ...state, mtcQry }));
   }
-  $: if (overviewSearchType !== $searchStore.overviewSearchType) {
-    searchStore.update(state => ({ ...state, overviewSearchType }));
+  $: if (ovType !== $searchStore.ovType) {
+    searchStore.update(state => ({ ...state, ovType }));
   }
-  $: if (matchesSearchType !== $searchStore.matchesSearchType) {
-    searchStore.update(state => ({ ...state, matchesSearchType }));
+  $: if (mtcType !== $searchStore.mtcType) {
+    searchStore.update(state => ({ ...state, mtcType }));
   }
 
   // -------------------------------------------------------------------------
   // Pagination state
   // -------------------------------------------------------------------------
 
-  let editingOverviewPage = false;
-  let editingMatchesPage = false;
-  let overviewPageInput = '';
-  let matchesPageInput = '';
+  let editOvPage = false;
+  let editMtcPage = false;
+  let ovPageInput = '';
+  let mtcPageInput = '';
 
-  let overviewPage = 1;
-  const overviewItemsPerPage = 10;
+  let ovPage = 1;
+  const OV_PER_PAGE = 10;
 
-  let matchesPage = 1;
-  const matchesItemsPerPage = 10;
+  let mtcPage = 1;
+  const MTC_PER_PAGE = 10;
 
-  $: overviewSearchQuery, overviewSearchType, overviewPage = 1;
-  $: matchesSearchQuery,  matchesSearchType,  matchesPage  = 1;
+  $: ovQry, ovType, ovPage = 1;
+  $: mtcQry, mtcType, mtcPage = 1;
 
   // -------------------------------------------------------------------------
   // Overview state
   // -------------------------------------------------------------------------
 
-  type OverviewStat = {
-    totalOccurrences: number;
-    genomeOccurrences: Map<number, number>;
-    chromosomeOccurrences: Map<string, number>;
-    maxConfidence: number;
+  type OvStat = {
+    totOcc: number;
+    genOcc: Map<number, number>;
+    chrOcc: Map<string, number>;
+    maxConf: number;
   };
-  type OverviewItem = [number, OverviewStat];
+  type OvItem = [number, OvStat];
 
-  let paginatedOverview: OverviewItem[] = [];
-  let overviewTotal = 0;
-  $: totalOverviewPages = Math.max(1, Math.ceil(overviewTotal / overviewItemsPerPage));
-  let overviewLoading = false;
-  let overviewAbort: AbortController | null = null;
-  const overviewDebouncer = makeDebouncer(400);
+  let ovItems: OvItem[] = [];
+  let ovTotal = 0;
+  $: totOvPages = Math.max(1, Math.ceil(ovTotal / OV_PER_PAGE));
+  let ovLoading = false;
+  let ovAbort: AbortController | null = null;
+  const ovDeb = makeDebouncer(400);
 
 
-  function aggregateToOverviewItem(agg: ContigAggregate): OverviewItem {
-    const genomeMap = new Map<number, number>();
+  function aggToOvItem(agg: SequenceAggregate): OvItem {
+    const genMap = new Map<number, number>();
 
     for (let gi = 0; gi < agg.per_genome.length; gi++) {
       const v = agg.per_genome[gi];
-      if (v > 0) genomeMap.set(gi, v);
+      if (v > 0) genMap.set(gi, v);
     }
 
     const chrMap = new Map<string, number>();
@@ -120,68 +120,68 @@
       chrMap.set(`${c.genome_index}-${c.chromosome}`, c.count);
     }
 
-    const stat: OverviewStat = {
-      totalOccurrences: agg.total_occurrences,
-      genomeOccurrences: genomeMap,
-      chromosomeOccurrences: chrMap,
-      maxConfidence: agg.max_confidence,
+    const stat: OvStat = {
+      totOcc: agg.total_occurrences,
+      genOcc: genMap,
+      chrOcc: chrMap,
+      maxConf: agg.max_confidence,
     };
     return [agg.qry_contig_id, stat];
   }
 
-  async function reloadOverview() {
-    if (!sessionId || !isQueryable) {
-      paginatedOverview = [];
-      overviewTotal = 0;
+  async function reloadOv() {
+    if (!sessId || !isQueryable) {
+      ovItems = [];
+      ovTotal = 0;
       return;
     }
-    if (overviewAbort) overviewAbort.abort();
-    overviewAbort = new AbortController();
-    const signal = overviewAbort.signal;
+    if (ovAbort) ovAbort.abort();
+    ovAbort = new AbortController();
+    const signal = ovAbort.signal;
 
-    const chipTimer = setTimeout(() => { overviewLoading = true; }, 200);
+    const chipTimer = setTimeout(() => { ovLoading = true; }, 200);
 
     try {
-      const page = await fetchContigs(sessionId, {
-        q: overviewSearchQuery,
-        searchType: overviewSearchType,
-        page: overviewPage,
-        perPage: overviewItemsPerPage,
+      const page = await fetchSeqs(sessId, {
+        q: ovQry,
+        searchType: ovType,
+        page: ovPage,
+        perPage: OV_PER_PAGE,
         signal,
       });
       if (!page) return; // aborted
-      overviewTotal = page.total;
-      paginatedOverview = page.items.map(aggregateToOverviewItem);
+      ovTotal = page.total;
+      ovItems = page.items.map(aggToOvItem);
     } catch (err) {
-      console.error('Failed to fetch /contigs:', err);
-      paginatedOverview = [];
-      overviewTotal = 0;
+      console.error('Failed to fetch /sequences:', err);
+      ovItems = [];
+      ovTotal = 0;
     } finally {
       clearTimeout(chipTimer);
-      overviewLoading = false;
+      ovLoading = false;
     }
   }
 
-  let overviewFirstLoadDone = false;
-  let matchesInitialHoldoff = true;
+  let ovFirstLoaded = false;
+  let mtcHoldoff = true;
 
-  $: if (sessionId === null || !isQueryable) {
-    overviewFirstLoadDone = false;
-    matchesInitialHoldoff = true;
+  $: if (sessId === null || !isQueryable) {
+    ovFirstLoaded = false;
+    mtcHoldoff = true;
   }
 
-  $: if (sessionId && isQueryable) {
-    overviewSearchQuery;
-    overviewSearchType;
-    overviewPage;
-    if (!overviewFirstLoadDone) {
-      overviewFirstLoadDone = true;
+  $: if (sessId && isQueryable) {
+    ovQry;
+    ovType;
+    ovPage;
+    if (!ovFirstLoaded) {
+      ovFirstLoaded = true;
       (async () => {
-        await reloadOverview();
-        matchesInitialHoldoff = false;
+        await reloadOv();
+        mtcHoldoff = false;
       })();
     } else {
-      overviewDebouncer.schedule(() => reloadOverview());
+      ovDeb.schedule(() => reloadOv());
     }
   }
 
@@ -189,25 +189,25 @@
   // Matches state (backed by /matches endpoint)
   // -------------------------------------------------------------------------
 
-  type MatchItem = {
+  type MtcItem = {
     qry_contig_id: number;
     records: MatchedRecord[];
     total_record_count: number;
     records_truncated: boolean;
   };
 
-  let paginatedMatches: MatchItem[] = [];
-  let matchesTotal = 0;
-  $: totalMatchesPages = Math.max(1, Math.ceil(matchesTotal / matchesItemsPerPage));
-  let matchesLoading = false;
-  let matchesAbort: AbortController | null = null;
-  const matchesDebouncer = makeDebouncer(400);
+  let mtcItems: MtcItem[] = [];
+  let mtcTotal = 0;
+  $: totMtcPages = Math.max(1, Math.ceil(mtcTotal / MTC_PER_PAGE));
+  let mtcLoading = false;
+  let mtcAbort: AbortController | null = null;
+  const mtcDeb = makeDebouncer(400);
 
   // -------------------------------------------------------------------------
-  // Contig-ID picker
+  // Sequence-ID picker
   // -------------------------------------------------------------------------
 
-  function matchEntryToItem(entry: MatchEntry): MatchItem {
+  function mtcEntryToItem(entry: MatchEntry): MtcItem {
     return {
       qry_contig_id: entry.qry_contig_id,
       records: entry.records as unknown as MatchedRecord[],
@@ -216,107 +216,107 @@
     };
   }
 
-  async function reloadMatches() {
-    if (!sessionId || !isQueryable) {
-      paginatedMatches = [];
-      matchesTotal = 0;
+  async function reloadMtc() {
+    if (!sessId || !isQueryable) {
+      mtcItems = [];
+      mtcTotal = 0;
       return;
     }
-    if (matchesAbort) matchesAbort.abort();
-    matchesAbort = new AbortController();
-    const signal = matchesAbort.signal;
+    if (mtcAbort) mtcAbort.abort();
+    mtcAbort = new AbortController();
+    const signal = mtcAbort.signal;
 
-    const chipTimer = setTimeout(() => { matchesLoading = true; }, 200);
+    const chipTimer = setTimeout(() => { mtcLoading = true; }, 200);
 
     try {
-      const page = await fetchMatchesPage(sessionId, {
-        q: matchesSearchQuery,
-        searchType: matchesSearchType,
-        page: matchesPage,
-        perPage: matchesItemsPerPage,
+      const page = await fetchMatchesPage(sessId, {
+        q: mtcQry,
+        searchType: mtcType,
+        page: mtcPage,
+        perPage: MTC_PER_PAGE,
         signal,
       });
       if (!page) return;
-      matchesTotal = page.total;
-      paginatedMatches = page.items.map(matchEntryToItem);
+      mtcTotal = page.total;
+      mtcItems = page.items.map(mtcEntryToItem);
     } catch (err) {
       console.error('Failed to fetch /matches:', err);
-      paginatedMatches = [];
-      matchesTotal = 0;
+      mtcItems = [];
+      mtcTotal = 0;
     } finally {
       clearTimeout(chipTimer);
-      matchesLoading = false;
+      mtcLoading = false;
     }
   }
 
-  $: if (sessionId && isQueryable && !matchesInitialHoldoff) {
-    matchesSearchQuery;
-    matchesSearchType;
-    matchesPage;
-    matchesDebouncer.schedule(() => reloadMatches());
+  $: if (sessId && isQueryable && !mtcHoldoff) {
+    mtcQry;
+    mtcType;
+    mtcPage;
+    mtcDeb.schedule(() => reloadMtc());
   }
 
   // -------------------------------------------------------------------------
   // Pagination controls
   // -------------------------------------------------------------------------
 
-  function goToOverviewPage(page: number) {
-    overviewPage = Math.max(1, Math.min(page, totalOverviewPages));
+  function goToOvPage(page: number) {
+    ovPage = Math.max(1, Math.min(page, totOvPages));
   }
-  function goToMatchesPage(page: number) {
-    matchesPage = Math.max(1, Math.min(page, totalMatchesPages));
-  }
-
-  function startEditingOverviewPage() {
-    editingOverviewPage = true;
-    overviewPageInput = overviewPage.toString();
-  }
-  function startEditingMatchesPage() {
-    editingMatchesPage = true;
-    matchesPageInput = matchesPage.toString();
+  function goToMtcPage(page: number) {
+    mtcPage = Math.max(1, Math.min(page, totMtcPages));
   }
 
-  function submitOverviewPageJump() {
-    const pageNum = parseInt(overviewPageInput);
-    if (!isNaN(pageNum)) goToOverviewPage(pageNum);
-    editingOverviewPage = false;
+  function startEditOvPage() {
+    editOvPage = true;
+    ovPageInput = ovPage.toString();
   }
-  function submitMatchesPageJump() {
-    const pageNum = parseInt(matchesPageInput);
-    if (!isNaN(pageNum)) goToMatchesPage(pageNum);
-    editingMatchesPage = false;
+  function startEditMtcPage() {
+    editMtcPage = true;
+    mtcPageInput = mtcPage.toString();
   }
 
-  function handleOverviewPageKeydown(e: KeyboardEvent) {
-    if (e.key === 'Enter') submitOverviewPageJump();
-    else if (e.key === 'Escape') editingOverviewPage = false;
+  function submitOvJump() {
+    const n = parseInt(ovPageInput);
+    if (!isNaN(n)) goToOvPage(n);
+    editOvPage = false;
   }
-  function handleMatchesPageKeydown(e: KeyboardEvent) {
-    if (e.key === 'Enter') submitMatchesPageJump();
-    else if (e.key === 'Escape') editingMatchesPage = false;
-  }
-
-  function setOverviewSearchType(type: SearchType) {
-    overviewSearchType = type;
-    overviewPage = 1;
-  }
-  function setMatchesSearchType(type: SearchType) {
-    matchesSearchType = type;
-    matchesPage = 1;
+  function submitMtcJump() {
+    const n = parseInt(mtcPageInput);
+    if (!isNaN(n)) goToMtcPage(n);
+    editMtcPage = false;
   }
 
-  $: overviewPlaceholder = (() => {
-    switch (overviewSearchType) {
-      case 'contig': return 'Search by contig ID (number)...';
+  function onOvPageKeydown(e: KeyboardEvent) {
+    if (e.key === 'Enter') submitOvJump();
+    else if (e.key === 'Escape') editOvPage = false;
+  }
+  function onMtcPageKeydown(e: KeyboardEvent) {
+    if (e.key === 'Enter') submitMtcJump();
+    else if (e.key === 'Escape') editMtcPage = false;
+  }
+
+  function setOvType(type: SearchType) {
+    ovType = type;
+    ovPage = 1;
+  }
+  function setMtcType(type: SearchType) {
+    mtcType = type;
+    mtcPage = 1;
+  }
+
+  $: ovPlaceholder = (() => {
+    switch (ovType) {
+      case 'sequence': return 'Search by sequence ID (number)...';
       case 'chromosome': return 'Search by chromosome (example, "1-2" for genome 1 chromosome 2)...';
       case 'confidence': return 'Search by confidence value (number)...';
       default: return 'Search...';
     }
   })();
 
-  $: matchesPlaceholder = (() => {
-    switch (matchesSearchType) {
-      case 'contig': return 'Search by contig ID (number)...';
+  $: mtcPlaceholder = (() => {
+    switch (mtcType) {
+      case 'sequence': return 'Search by sequence ID (number)...';
       case 'chromosome': return 'Search by chromosome (number)...';
       case 'confidence': return 'Search by confidence value (number)...';
       default: return 'Search...';
@@ -328,11 +328,11 @@
   // -------------------------------------------------------------------------
 
   onDestroy(() => {
-    unsubscribe();
-    if (overviewAbort) overviewAbort.abort();
-    if (matchesAbort)  matchesAbort.abort();
-    overviewDebouncer.cancel();
-    matchesDebouncer.cancel();
+    unsub();
+    if (ovAbort) ovAbort.abort();
+    if (mtcAbort)  mtcAbort.abort();
+    ovDeb.cancel();
+    mtcDeb.cancel();
   });
 </script>
 
@@ -343,8 +343,8 @@
       <div class="file-item">
         <div class="color-box" style="background: {file.color}"></div>
         <span class="file-name">{file.name}</span>
-        <span class="file-size">{(genomeSizes.get(idx) || 0).toLocaleString()} bp</span>
-        <span class="file-pct">({segments[idx]?.percentage}%)</span>
+        <span class="file-size">{(genSizes.get(idx) || 0).toLocaleString()} bp</span>
+        <span class="file-pct">({segments[idx]?.pct}%)</span>
       </div>
     {/each}
   </div>
@@ -352,29 +352,29 @@
   {#if isQueryable}
     <div class="section overview-section">
       <h2>
-        Query Overview ({overviewTotal.toLocaleString()} {overviewSearchQuery ? 'matching' : 'unique'})
-        {#if overviewLoading}
+        Query Overview ({ovTotal.toLocaleString()} {ovQry ? 'matching' : 'unique'})
+        {#if ovLoading}
           <span class="loading-chip">loading…</span>
         {/if}
       </h2>
-      
+
       <div class="search-container">
         <div class="search-type-toggle">
-          <button 
-            class:active={overviewSearchType === 'contig'}
-            on:click={() => setOverviewSearchType('contig')}
+          <button
+            class:active={ovType === 'sequence'}
+            on:click={() => setOvType('sequence')}
           >
-            Contig ID
+            Sequence ID
           </button>
-          <button 
-            class:active={overviewSearchType === 'chromosome'}
-            on:click={() => setOverviewSearchType('chromosome')}
+          <button
+            class:active={ovType === 'chromosome'}
+            on:click={() => setOvType('chromosome')}
           >
             Chromosome
           </button>
-          <button 
-            class:active={overviewSearchType === 'confidence'}
-            on:click={() => setOverviewSearchType('confidence')}
+          <button
+            class:active={ovType === 'confidence'}
+            on:click={() => setOvType('confidence')}
           >
             Confidence
           </button>
@@ -382,38 +382,38 @@
         <div class="search-bar">
           <input
             type="text"
-            placeholder={overviewPlaceholder}
-            bind:value={overviewSearchQuery}
+            placeholder={ovPlaceholder}
+            bind:value={ovQry}
             class="search-input"
           />
         </div>
       </div>
-      
+
       <div class="overview-list">
-        {#each paginatedOverview as [qryId, stat]}
+        {#each ovItems as [qryId, stat]}
           <div class="overview-item">
             <div class="overview-header">
               <strong>QryContig {qryId}</strong>
-              <span class="overview-total">{stat.totalOccurrences} total occurrences</span>
-              <span class="overview-confidence">Max conf: {stat.maxConfidence.toFixed(2)}</span>
+              <span class="overview-total">{stat.totOcc} total occurrences</span>
+              <span class="overview-confidence">Max conf: {stat.maxConf.toFixed(2)}</span>
             </div>
-            
+
             <div class="genome-breakdown">
               <div class="breakdown-label">Per genome:</div>
-              {#each Array.from(stat.genomeOccurrences.entries()) as [genomeIdx, count]}
-                <span class="genome-badge" style="background: {files[genomeIdx]?.color}20; color: {files[genomeIdx]?.color}; border-color: {files[genomeIdx]?.color}">
-                  {files[genomeIdx]?.name}: {count}x
+              {#each Array.from(stat.genOcc.entries()) as [genIdx, count]}
+                <span class="genome-badge" style="background: {files[genIdx]?.color}20; color: {files[genIdx]?.color}; border-color: {files[genIdx]?.color}">
+                  {files[genIdx]?.name}: {count}x
                 </span>
               {/each}
             </div>
-            
+
             <div class="chromosome-breakdown">
               <div class="breakdown-label">Per chromosome:</div>
               <div class="chr-grid">
-                {#each Array.from(stat.chromosomeOccurrences.entries()) as [chrKey, count]}
-                  {@const [genomeIdx, chrNum] = chrKey.split('-').map(Number)}
-                  <span class="chr-mini-badge" style="background: {files[genomeIdx]?.color}20; color: {files[genomeIdx]?.color}; border-color: {files[genomeIdx]?.color}">
-                    G{genomeIdx} Chr{chrNum}: {count}
+                {#each Array.from(stat.chrOcc.entries()) as [chrKey, count]}
+                  {@const [genIdx, chrNum] = chrKey.split('-').map(Number)}
+                  <span class="chr-mini-badge" style="background: {files[genIdx]?.color}20; color: {files[genIdx]?.color}; border-color: {files[genIdx]?.color}">
+                    G{genIdx} Chr{chrNum}: {count}
                   </span>
                 {/each}
               </div>
@@ -421,60 +421,60 @@
           </div>
         {/each}
       </div>
-      
-      {#if totalOverviewPages > 1}
+
+      {#if totOvPages > 1}
         <div class="pagination">
-          <button 
-            class="page-btn" 
-            on:click={() => goToOverviewPage(1)}
-            disabled={overviewPage === 1}
+          <button
+            class="page-btn"
+            on:click={() => goToOvPage(1)}
+            disabled={ovPage === 1}
           >
             ««
           </button>
-          <button 
-            class="page-btn" 
-            on:click={() => goToOverviewPage(overviewPage - 1)}
-            disabled={overviewPage === 1}
+          <button
+            class="page-btn"
+            on:click={() => goToOvPage(ovPage - 1)}
+            disabled={ovPage === 1}
           >
             «
           </button>
-          
-          {#if editingOverviewPage}
+
+          {#if editOvPage}
             <input
               type="text"
               class="page-input"
-              bind:value={overviewPageInput}
-              on:keydown={handleOverviewPageKeydown}
-              on:blur={submitOverviewPageJump}
+              bind:value={ovPageInput}
+              on:keydown={onOvPageKeydown}
+              on:blur={submitOvJump}
               on:focus
             />
           {:else}
-            <span 
-              class="page-info" 
-              on:dblclick={startEditingOverviewPage}
+            <span
+              class="page-info"
+              on:dblclick={startEditOvPage}
               role="button"
               tabindex="0"
               on:keydown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
-                  startEditingOverviewPage();
+                  startEditOvPage();
                 }
               }}
             >
-              ({overviewPage} / {totalOverviewPages})
+              ({ovPage} / {totOvPages})
             </span>
           {/if}
-          
-          <button 
-            class="page-btn" 
-            on:click={() => goToOverviewPage(overviewPage + 1)}
-            disabled={overviewPage === totalOverviewPages}
+
+          <button
+            class="page-btn"
+            on:click={() => goToOvPage(ovPage + 1)}
+            disabled={ovPage === totOvPages}
           >
             »
           </button>
-          <button 
-            class="page-btn" 
-            on:click={() => goToOverviewPage(totalOverviewPages)}
-            disabled={overviewPage === totalOverviewPages}
+          <button
+            class="page-btn"
+            on:click={() => goToOvPage(totOvPages)}
+            disabled={ovPage === totOvPages}
           >
             »»
           </button>
@@ -486,24 +486,24 @@
   <div class="section filters-section">
     <h2>Filters</h2>
     <div class="filters-grid">
-      
+
       <div class="filter-group">
-        <label for="query-contig-filter">Query Contig ID:</label>
-        <ContigPicker
-          id="query-contig-filter"
-          options={availableQueryContigIds}
-          bind:value={selectedQueryContigId}
-          placeholder="Type or pick a contig ID…"
+        <label for="query-seq-filter">Query Sequence ID:</label>
+        <SeqPicker
+          id="query-seq-filter"
+          options={availSeqIds}
+          bind:value={selSeqId}
+          placeholder="Type or pick a sequence ID…"
         />
       </div>
 
       <div class="filter-group">
         <label for="genome1-filter">Genome 1:</label>
-        <select id="genome1-filter" bind:value={selectedGenome1}>
+        <select id="genome1-filter" bind:value={selGen1}>
           <option value="">All Genomes</option>
-          {#each availableGenomes as genome}
-            {#if genome.value !== selectedGenome2}
-              <option value={genome.value}>{genome.label}</option>
+          {#each availGens as gen}
+            {#if gen.value !== selGen2}
+              <option value={gen.value}>{gen.label}</option>
             {/if}
           {/each}
         </select>
@@ -511,11 +511,11 @@
 
       <div class="filter-group">
         <label for="genome2-filter">Genome 2 (optional):</label>
-        <select id="genome2-filter" bind:value={selectedGenome2}>
+        <select id="genome2-filter" bind:value={selGen2}>
           <option value="">Any Genome</option>
-          {#each availableGenomes as genome}
-            {#if genome.value !== selectedGenome1}
-              <option value={genome.value}>{genome.label}</option>
+          {#each availGens as gen}
+            {#if gen.value !== selGen1}
+              <option value={gen.value}>{gen.label}</option>
             {/if}
           {/each}
         </select>
@@ -523,21 +523,21 @@
 
       <div class="filter-group">
         <label for="genome-chromosome-filter">Genome for Chromosome:</label>
-        <select id="genome-chromosome-filter" bind:value={selectedGenomeForChromosome}>
+        <select id="genome-chromosome-filter" bind:value={selGenForChr}>
           <option value="">Select Genome</option>
-          {#if selectedGenome1 !== ''}
-            <option value={selectedGenome1}>
-              {availableGenomes.find(g => g.value === selectedGenome1)?.label}
+          {#if selGen1 !== ''}
+            <option value={selGen1}>
+              {availGens.find(g => g.value === selGen1)?.label}
             </option>
           {/if}
-          {#if selectedGenome2 !== '' && selectedGenome2 !== selectedGenome1}
-            <option value={selectedGenome2}>
-              {availableGenomes.find(g => g.value === selectedGenome2)?.label}
+          {#if selGen2 !== '' && selGen2 !== selGen1}
+            <option value={selGen2}>
+              {availGens.find(g => g.value === selGen2)?.label}
             </option>
           {/if}
-          {#if selectedGenome1 === '' && selectedGenome2 === ''}
-            {#each availableGenomes as genome}
-              <option value={genome.value}>{genome.label}</option>
+          {#if selGen1 === '' && selGen2 === ''}
+            {#each availGens as gen}
+              <option value={gen.value}>{gen.label}</option>
             {/each}
           {/if}
         </select>
@@ -545,39 +545,39 @@
 
       <div class="filter-group">
         <label for="chromosome-filter">Chromosome:</label>
-        <select id="chromosome-filter" bind:value={selectedChromosome} disabled={!selectedGenomeForChromosome}>
+        <select id="chromosome-filter" bind:value={selChr} disabled={!selGenForChr}>
           <option value="">All Chromosomes</option>
-          {#each availableChromosomes as chr}
+          {#each availChrs as chr}
             <option value={chr}>Chr {chr}</option>
           {/each}
         </select>
       </div>
 
       <div class="filter-group">
-        <button on:click={clearAllFilters} class="clear-filters-btn">
+        <button on:click={clearAllFlts} class="clear-filters-btn">
           Clear All Filters
         </button>
       </div>
     </div>
 
-    {#if selectedQueryContigId || selectedGenome1 || selectedChromosome}
+    {#if selSeqId || selGen1 || selChr}
       <div class="active-filters">
         <h3>Active Filters:</h3>
         <div class="filter-tags">
-          {#if selectedQueryContigId}
-            <span class="filter-tag">Query Contig: {selectedQueryContigId}</span>
+          {#if selSeqId}
+            <span class="filter-tag">Query Sequence: {selSeqId}</span>
           {/if}
-          {#if selectedGenome1}
+          {#if selGen1}
             <span class="filter-tag">
-              Genome: {availableGenomes.find(g => g.value === selectedGenome1)?.label}
-              {#if selectedGenome2}
-                ↔ {availableGenomes.find(g => g.value === selectedGenome2)?.label}
+              Genome: {availGens.find(g => g.value === selGen1)?.label}
+              {#if selGen2}
+                ↔ {availGens.find(g => g.value === selGen2)?.label}
               {/if}
             </span>
           {/if}
-          {#if selectedChromosome && selectedGenomeForChromosome}
+          {#if selChr && selGenForChr}
             <span class="filter-tag">
-              Chromosome {selectedChromosome} on {availableGenomes.find(g => g.value === selectedGenomeForChromosome)?.label}
+              Chromosome {selChr} on {availGens.find(g => g.value === selGenForChr)?.label}
             </span>
           {/if}
         </div>
@@ -588,29 +588,29 @@
   {#if isQueryable}
     <div class="section">
       <h2>
-        Chromosome Matches ({matchesTotal.toLocaleString()} {matchesSearchQuery ? 'matching' : 'unique'})
-        {#if matchesLoading}
+        Chromosome Matches ({mtcTotal.toLocaleString()} {mtcQry ? 'matching' : 'unique'})
+        {#if mtcLoading}
           <span class="loading-chip">loading…</span>
         {/if}
       </h2>
-      
+
       <div class="search-container">
         <div class="search-type-toggle">
-          <button 
-            class:active={matchesSearchType === 'contig'}
-            on:click={() => setMatchesSearchType('contig')}
+          <button
+            class:active={mtcType === 'sequence'}
+            on:click={() => setMtcType('sequence')}
           >
-            Contig ID
+            Sequence ID
           </button>
-          <button 
-            class:active={matchesSearchType === 'chromosome'}
-            on:click={() => setMatchesSearchType('chromosome')}
+          <button
+            class:active={mtcType === 'chromosome'}
+            on:click={() => setMtcType('chromosome')}
           >
             Chromosome
           </button>
-          <button 
-            class:active={matchesSearchType === 'confidence'}
-            on:click={() => setMatchesSearchType('confidence')}
+          <button
+            class:active={mtcType === 'confidence'}
+            on:click={() => setMtcType('confidence')}
           >
             Confidence
           </button>
@@ -618,15 +618,15 @@
         <div class="search-bar">
           <input
             type="text"
-            placeholder={matchesPlaceholder}
-            bind:value={matchesSearchQuery}
+            placeholder={mtcPlaceholder}
+            bind:value={mtcQry}
             class="search-input"
           />
         </div>
       </div>
-      
+
       <div class="match-list">
-        {#each paginatedMatches as match}
+        {#each mtcItems as match}
           <div class="match-item">
             <div class="match-header">
               <strong>QryContig {match.qry_contig_id}</strong>
@@ -636,10 +636,10 @@
             </div>
             <div class="occurrence-list">
               {#each match.records as record}
-                {@const genomeIdx = fileToGenome[record.file_index] ?? record.file_index}
+                {@const genIdx = fileToGen[record.file_index] ?? record.file_index}
                 <div class="occurrence">
-                  <span class="file-badge" style="background: {files[genomeIdx]?.color}20; color: {files[genomeIdx]?.color}; border-color: {files[genomeIdx]?.color}">
-                    {files[genomeIdx]?.name}
+                  <span class="file-badge" style="background: {files[genIdx]?.color}20; color: {files[genIdx]?.color}; border-color: {files[genIdx]?.color}">
+                    {files[genIdx]?.name}
                   </span>
                   <span class="chr-info">Chr {record.ref_contig_id}</span>
                   <span class="orientation-badge" class:plus={record.orientation === '+'} class:minus={record.orientation === '-'}>
@@ -657,60 +657,60 @@
           </div>
         {/each}
       </div>
-      
-      {#if totalMatchesPages > 1}
+
+      {#if totMtcPages > 1}
         <div class="pagination">
-          <button 
-            class="page-btn" 
-            on:click={() => goToMatchesPage(1)}
-            disabled={matchesPage === 1}
+          <button
+            class="page-btn"
+            on:click={() => goToMtcPage(1)}
+            disabled={mtcPage === 1}
           >
             ««
           </button>
-          <button 
-            class="page-btn" 
-            on:click={() => goToMatchesPage(matchesPage - 1)}
-            disabled={matchesPage === 1}
+          <button
+            class="page-btn"
+            on:click={() => goToMtcPage(mtcPage - 1)}
+            disabled={mtcPage === 1}
           >
             «
           </button>
-          
-          {#if editingMatchesPage}
+
+          {#if editMtcPage}
             <input
               type="text"
               class="page-input"
-              bind:value={matchesPageInput}
-              on:keydown={handleMatchesPageKeydown}
-              on:blur={submitMatchesPageJump}
+              bind:value={mtcPageInput}
+              on:keydown={onMtcPageKeydown}
+              on:blur={submitMtcJump}
               on:focus
             />
           {:else}
-            <span 
-              class="page-info" 
-              on:dblclick={startEditingMatchesPage}
+            <span
+              class="page-info"
+              on:dblclick={startEditMtcPage}
               role="button"
               tabindex="0"
               on:keydown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
-                  startEditingMatchesPage();
+                  startEditMtcPage();
                 }
               }}
             >
-              ({matchesPage} / {totalMatchesPages})
+              ({mtcPage} / {totMtcPages})
             </span>
           {/if}
-          
-          <button 
-            class="page-btn" 
-            on:click={() => goToMatchesPage(matchesPage + 1)}
-            disabled={matchesPage === totalMatchesPages}
+
+          <button
+            class="page-btn"
+            on:click={() => goToMtcPage(mtcPage + 1)}
+            disabled={mtcPage === totMtcPages}
           >
             »
           </button>
-          <button 
-            class="page-btn" 
-            on:click={() => goToMatchesPage(totalMatchesPages)}
-            disabled={matchesPage === totalMatchesPages}
+          <button
+            class="page-btn"
+            on:click={() => goToMtcPage(totMtcPages)}
+            disabled={mtcPage === totMtcPages}
           >
             »»
           </button>
@@ -722,21 +722,21 @@
   <div class="section debug-info">
     <h2>Debug Info</h2>
     <div class="debug-item">
-      <strong>Total Genome Size:</strong> {totalGenomeSize.toLocaleString()} bp
+      <strong>Total Genome Size:</strong> {totGenSize.toLocaleString()} bp
     </div>
     <div class="debug-item">
-      <strong>Flow Paths:</strong> {filteredFlowPaths.length} {showDuplicates ? '(self-flow)' : '(cross-genome)'}
+      <strong>Flow Paths:</strong> {fltFlowPaths.length} {showDups ? '(self-flow)' : '(cross-genome)'}
     </div>
     <div class="debug-item">
-      <strong>Show Self-Flow:</strong> {showDuplicates ? 'ON' : 'OFF'}
+      <strong>Show Self-Flow:</strong> {showDups ? 'ON' : 'OFF'}
     </div>
     <div class="debug-item">
-      <strong>Active Filters:</strong> 
-      {selectedQueryContigId ? 'QueryContig ' + selectedQueryContigId + ' ' : ''}
-      {selectedGenome1 ? 'Genome1:' + selectedGenome1 + ' ' : ''}
-      {selectedGenome2 ? 'Genome2:' + selectedGenome2 + ' ' : ''}
-      {selectedChromosome ? 'Chr:' + selectedChromosome + ' ' : ''}
-      {!selectedQueryContigId && !selectedGenome1 && !selectedChromosome ? 'None' : ''}
+      <strong>Active Filters:</strong>
+      {selSeqId ? 'QuerySeq ' + selSeqId + ' ' : ''}
+      {selGen1 ? 'Genome1:' + selGen1 + ' ' : ''}
+      {selGen2 ? 'Genome2:' + selGen2 + ' ' : ''}
+      {selChr ? 'Chr:' + selChr + ' ' : ''}
+      {!selSeqId && !selGen1 && !selChr ? 'None' : ''}
     </div>
   </div>
 </div>
@@ -1175,7 +1175,7 @@
   .occurrence-list { margin-bottom: 0.5rem; }
 
   /* Shown under the occurrence list when the server truncated the
-     records (more than MAX_RECORDS_PER_MATCH_ENTRY on the backend).
+     records (more than MAX_RECORDS_PER_ENTRY on the backend).
      Subtle — not an error, just an informational "there's more" tag. */
   .records-truncated-hint {
     margin-top: 0.375rem;

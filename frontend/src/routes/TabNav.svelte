@@ -2,10 +2,10 @@
   import { createEventDispatcher } from 'svelte';
   import SunIcon from '$lib/assets/sun.svg';
   import MoonIcon from '$lib/assets/moon.svg';
-  export let activeTab: 'visualization' | 'analysis' = 'visualization';
-  const dispatch = createEventDispatcher<{ tabChange: 'visualization' | 'analysis' }>();
+  export let activeTab: 'viz' | 'anlys' = 'viz';
+  const dispatch = createEventDispatcher<{ tabChange: 'viz' | 'anlys' }>();
 
-  function selectTab(tab: 'visualization' | 'analysis') {
+  function selTab(tab: 'viz' | 'anlys') {
     activeTab = tab;
     dispatch('tabChange', tab);
   }
@@ -16,8 +16,8 @@
 
     <button
       class="tab"
-      class:active={activeTab === 'visualization'}
-      on:click={() => selectTab('visualization')}
+      class:active={activeTab === 'viz'}
+      on:click={() => selTab('viz')}
     >
       <svg class="tab-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
         <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="2" />
@@ -28,8 +28,8 @@
 
     <button
       class="tab"
-      class:active={activeTab === 'analysis'}
-      on:click={() => selectTab('analysis')}
+      class:active={activeTab === 'anlys'}
+      on:click={() => selTab('anlys')}
     >
       <svg class="tab-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
         <rect x="2" y="10" width="3" height="4" fill="currentColor" />

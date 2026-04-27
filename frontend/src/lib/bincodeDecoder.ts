@@ -39,7 +39,7 @@ export interface CompleteFrame {
   total_matches: number;
   total_records: number;
   per_genome_records: number[];
-  distinct_contig_count: number;
+  distinct_sequence_count: number;
 }
 
 export type StreamFrame =
@@ -106,65 +106,65 @@ class ByteReader {
 // Per-variant decoders
 // ---------------------------------------------------------------------------
 
-function decodeChromosomeInfoVec(reader: ByteReader): ChromosomeInfo[] {
-  const length = Number(reader.readU64());
-  const chromosomes: ChromosomeInfo[] = [];
-  for (let i = 0; i < length; i++) {
-    const ref_contig_id = reader.readU8();
-    const ref_len = reader.readF64();
-    chromosomes.push({ ref_contig_id, ref_len });
+function decChrInfoVec(rd: ByteReader): ChromosomeInfo[] {
+  const len = Number(rd.readU64());
+  const out: ChromosomeInfo[] = [];
+  for (let i = 0; i < len; i++) {
+    const ref_contig_id = rd.readU8();
+    const ref_len = rd.readF64();
+    out.push({ ref_contig_id, ref_len });
   }
-  return chromosomes;
+  return out;
 }
 
-function decodeChromosomeInfoOuter(reader: ByteReader): ChromosomeInfo[][] {
-  const n = Number(reader.readU64());
+function decChrInfoOuter(rd: ByteReader): ChromosomeInfo[][] {
+  const n = Number(rd.readU64());
   const out: ChromosomeInfo[][] = [];
   for (let i = 0; i < n; i++) {
-    out.push(decodeChromosomeInfoVec(reader));
+    out.push(decChrInfoVec(rd));
   }
   return out;
 }
 
-function decodeU64Vec(reader: ByteReader): number[] {
-  const n = Number(reader.readU64());
+function decU64Vec(rd: ByteReader): number[] {
+  const n = Number(rd.readU64());
   const out: number[] = [];
   for (let i = 0; i < n; i++) {
-    out.push(Number(reader.readU64()));
+    out.push(Number(rd.readU64()));
   }
   return out;
 }
 
-function decodeProgressFrame(reader: ByteReader): ProgressFrame {
-  const total_matches       = Number(reader.readU64());
-  const total_records       = Number(reader.readU64());
-  const per_genome_records  = decodeU64Vec(reader);
+function decProgress(rd: ByteReader): ProgressFrame {
+  const total_matches      = Number(rd.readU64());
+  const total_records      = Number(rd.readU64());
+  const per_genome_records = decU64Vec(rd);
   return { total_matches, total_records, per_genome_records };
 }
 
-function decodeCompleteFrame(reader: ByteReader): CompleteFrame {
-  const total_matches          = Number(reader.readU64());
-  const total_records          = Number(reader.readU64());
-  const per_genome_records     = decodeU64Vec(reader);
-  const distinct_contig_count  = Number(reader.readU64());
-  return { total_matches, total_records, per_genome_records, distinct_contig_count };
+function decComplete(rd: ByteReader): CompleteFrame {
+  const total_matches             = Number(rd.readU64());
+  const total_records             = Number(rd.readU64());
+  const per_genome_records        = decU64Vec(rd);
+  const distinct_sequence_count   = Number(rd.readU64());
+  return { total_matches, total_records, per_genome_records, distinct_sequence_count };
 }
 
-function decodeStreamFrame(bytes: Uint8Array): StreamFrame {
-  const reader = new ByteReader(bytes);
-  const variant = reader.readU32();
+function decStreamFrame(bytes: Uint8Array): StreamFrame {
+  const rd = new ByteReader(bytes);
+  const variant = rd.readU32();
 
   switch (variant) {
     case 0: {
-      const chromosomeInfo = decodeChromosomeInfoOuter(reader);
+      const chromosomeInfo = decChrInfoOuter(rd);
       return { type: 'chromosomeInfo', chromosomeInfo };
     }
     case 1: {
-      const progress = decodeProgressFrame(reader);
+      const progress = decProgress(rd);
       return { type: 'progress', progress };
     }
     case 2: {
-      const complete = decodeCompleteFrame(reader);
+      const complete = decComplete(rd);
       return { type: 'complete', complete };
     }
     default:
@@ -177,84 +177,84 @@ function decodeStreamFrame(bytes: Uint8Array): StreamFrame {
 // ---------------------------------------------------------------------------
 
 export async function* processMatchStream(
-  response: Response
+  resp: Response
 ): AsyncGenerator<StreamFrame> {
-  const reader = response.body?.getReader();
-  if (!reader) {
+  const rd = resp.body?.getReader();
+  if (!rd) {
     throw new Error('No response body available');
   }
 
-  let buffer = new Uint8Array(1 << 14); // 16 KiB initial
+  let buf = new Uint8Array(1 << 14); // 16 KiB initial
   let readPos = 0;
   let writePos = 0;
-  let messageCount = 0;
+  let msgCnt = 0;
 
-  const ensureCapacity = (additional: number) => {
-    if (writePos + additional <= buffer.length) return;
+  const ensureCap = (extra: number) => {
+    if (writePos + extra <= buf.length) return;
     if (readPos > 0) {
-      buffer.copyWithin(0, readPos, writePos);
+      buf.copyWithin(0, readPos, writePos);
       writePos -= readPos;
       readPos = 0;
-      if (writePos + additional <= buffer.length) return;
+      if (writePos + extra <= buf.length) return;
     }
-    let newSize = buffer.length;
-    while (newSize < writePos + additional) {
-      newSize = Math.max(newSize * 2, newSize + additional);
+    let next = buf.length;
+    while (next < writePos + extra) {
+      next = Math.max(next * 2, next + extra);
     }
-    const next = new Uint8Array(newSize);
-    next.set(buffer.subarray(0, writePos));
-    buffer = next;
+    const grown = new Uint8Array(next);
+    grown.set(buf.subarray(0, writePos));
+    buf = grown;
   };
 
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await rd.read();
       if (done) {
-        const leftover = writePos - readPos;
-        if (leftover > 0) {
-          console.warn(`Leftover bytes: ${leftover}`);
+        const left = writePos - readPos;
+        if (left > 0) {
+          console.warn(`Leftover bytes: ${left}`);
         }
         break;
       }
 
-      ensureCapacity(value.length);
-      buffer.set(value, writePos);
+      ensureCap(value.length);
+      buf.set(value, writePos);
       writePos += value.length;
 
       while (writePos - readPos >= 4) {
-        const length =
-          buffer[readPos] |
-          (buffer[readPos + 1] << 8) |
-          (buffer[readPos + 2] << 16) |
-          (buffer[readPos + 3] << 24);
+        const len =
+          buf[readPos] |
+          (buf[readPos + 1] << 8) |
+          (buf[readPos + 2] << 16) |
+          (buf[readPos + 3] << 24);
 
-        if (length < 0 || length > 10_000_000) {
-          console.warn(`Suspicious frame length: ${length}`);
+        if (len < 0 || len > 10_000_000) {
+          console.warn(`Suspicious frame length: ${len}`);
         }
-        if (writePos - readPos < 4 + length) {
+        if (writePos - readPos < 4 + len) {
           break;
         }
 
-        const messageBytes = buffer.subarray(readPos + 4, readPos + 4 + length);
-        readPos += 4 + length;
+        const msgBytes = buf.subarray(readPos + 4, readPos + 4 + len);
+        readPos += 4 + len;
 
         try {
-          const frame = decodeStreamFrame(messageBytes);
-          messageCount++;
+          const frame = decStreamFrame(msgBytes);
+          msgCnt++;
           yield frame;
-        } catch (error) {
-          console.error(`Failed to decode frame ${messageCount + 1}:`, error);
+        } catch (err) {
+          console.error(`Failed to decode frame ${msgCnt + 1}:`, err);
         }
       }
 
-      if (readPos > buffer.length >>> 1) {
-        buffer.copyWithin(0, readPos, writePos);
+      if (readPos > buf.length >>> 1) {
+        buf.copyWithin(0, readPos, writePos);
         writePos -= readPos;
         readPos = 0;
       }
     }
   } finally {
-    reader.releaseLock();
+    rd.releaseLock();
   }
 }
 
@@ -263,8 +263,8 @@ export async function* processMatchStream(
 // ---------------------------------------------------------------------------
 
 export const __testUtils = {
-  decodeStreamFrame,
-  decodeChromosomeInfoOuter,
-  decodeProgressFrame,
-  decodeCompleteFrame,
+  decStreamFrame,
+  decChrInfoOuter,
+  decProgress,
+  decComplete,
 };

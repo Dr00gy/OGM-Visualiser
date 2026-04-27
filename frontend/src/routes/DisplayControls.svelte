@@ -1,10 +1,10 @@
 <script lang="ts">
-  export let showDuplicates = false;
+  export let showDups = false;
 </script>
 
 <div class="display-controls">
   <label class="toggle-label">
-    <input type="checkbox" bind:checked={showDuplicates} />
+    <input type="checkbox" bind:checked={showDups} />
     <span class="toggle-slider"></span>
     Show self flow lines
   </label>

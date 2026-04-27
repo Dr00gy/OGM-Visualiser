@@ -5,17 +5,17 @@ import { browser } from '$app/environment';
 // Donut tab
 // ---------------------------------------------------------------------------
 
-export interface DonutFilterState {
-  /** Selected query contig ID (as string; '' = no filter). */
-  selectedQueryContigId: string;
-  selectedGenome1: string;
-  selectedGenome2: string;
+export interface DonutFltState {
+  /** Selected query sequence id (as string; '' = no filter). */
+  selSeqId: string;
+  selGen1: string;
+  selGen2: string;
   /** Chromosome filter (1..24 as string; '' = none). */
-  selectedChromosome: string;
+  selChr: string;
   /** Which genome the chromosome filter applies to. */
-  selectedGenomeForChromosome: string;
+  selGenForChr: string;
   /** Render intra-genome flows instead of cross-genome ones. */
-  showDuplicates: boolean;
+  showDups: boolean;
   /** Donut zoom scale (1.0 = default). */
   scale: number;
 }
@@ -24,53 +24,55 @@ export interface DonutFilterState {
 // Area-analysis tab
 // ---------------------------------------------------------------------------
 
-export interface AreaAnalysisFilterState {
+export interface AreaFltState {
   /** Selected GENOME indices. */
-  selectedFiles: number[];
+  selFiles: number[];
   /** Chromosome currently being inspected (1..24). */
-  selectedChromosome: number;
+  selChr: number;
   /** Window size in base pairs. Default 100 kb. */
-  windowSize: number;
+  winSize: number;
   /** Zero-based index of the currently-displayed window. */
-  currentWindowIndex: number;
+  curWinIdx: number;
   /** text in the search box. */
-  searchQuery: string;
+  qry: string;
 }
 
-function createDonutFilterStateStore() {
-  const defaultState: DonutFilterState = {
-    selectedQueryContigId: '',
-    selectedGenome1: '',
-    selectedGenome2: '',
-    selectedChromosome: '',
-    selectedGenomeForChromosome: '',
-    showDuplicates: false,
+const AREA_LS_KEY = 'areaFltSt';
+
+function makeDonutFltStore() {
+  const def: DonutFltState = {
+    selSeqId: '',
+    selGen1: '',
+    selGen2: '',
+    selChr: '',
+    selGenForChr: '',
+    showDups: false,
     scale: 1.0
   };
 
-  const { subscribe, set, update } = writable<DonutFilterState>(defaultState);
+  const { subscribe, set, update } = writable<DonutFltState>(def);
 
   return {
     subscribe,
     set,
     update,
-    reset: () => set(defaultState)
+    reset: () => set(def)
   };
 }
 
-function createAreaAnalysisFilterStateStore() { // TODO:
-  const getInitialValue = (): AreaAnalysisFilterState => {
+function makeAreaFltStore() {
+  const init = (): AreaFltState => {
     if (!browser) {
       return {
-        selectedFiles: [0],
-        selectedChromosome: 1,
-        windowSize: 100000,
-        currentWindowIndex: 0,
-        searchQuery: ''
+        selFiles: [0],
+        selChr: 1,
+        winSize: 100000,
+        curWinIdx: 0,
+        qry: ''
       };
     }
 
-    const stored = localStorage.getItem('areaAnalysisFilterState');
+    const stored = localStorage.getItem(AREA_LS_KEY);
     if (stored) {
       try {
         return JSON.parse(stored);
@@ -80,51 +82,51 @@ function createAreaAnalysisFilterStateStore() { // TODO:
     }
 
     return {
-      selectedFiles: [0],
-      selectedChromosome: 1,
-      windowSize: 100000,
-      currentWindowIndex: 0,
-      searchQuery: ''
+      selFiles: [0],
+      selChr: 1,
+      winSize: 100000,
+      curWinIdx: 0,
+      qry: ''
     };
   };
 
-  const { subscribe, set, update } = writable<AreaAnalysisFilterState>(getInitialValue());
+  const { subscribe, set, update } = writable<AreaFltState>(init());
 
   return {
     subscribe,
 
-    set: (value: AreaAnalysisFilterState) => {
+    set: (v: AreaFltState) => {
       if (browser) {
-        localStorage.setItem('areaAnalysisFilterState', JSON.stringify(value));
+        localStorage.setItem(AREA_LS_KEY, JSON.stringify(v));
       }
-      set(value);
+      set(v);
     },
 
-    update: (updater: (state: AreaAnalysisFilterState) => AreaAnalysisFilterState) => {
-      update((state) => {
-        const newState = updater(state);
+    update: (fn: (s: AreaFltState) => AreaFltState) => {
+      update((s) => {
+        const next = fn(s);
         if (browser) {
-          localStorage.setItem('areaAnalysisFilterState', JSON.stringify(newState));
+          localStorage.setItem(AREA_LS_KEY, JSON.stringify(next));
         }
-        return newState;
+        return next;
       });
     },
 
     reset: () => {
-      const defaultState: AreaAnalysisFilterState = {
-        selectedFiles: [0],
-        selectedChromosome: 1,
-        windowSize: 100000,
-        currentWindowIndex: 0,
-        searchQuery: ''
+      const def: AreaFltState = {
+        selFiles: [0],
+        selChr: 1,
+        winSize: 100000,
+        curWinIdx: 0,
+        qry: ''
       };
       if (browser) {
-        localStorage.setItem('areaAnalysisFilterState', JSON.stringify(defaultState));
+        localStorage.setItem(AREA_LS_KEY, JSON.stringify(def));
       }
-      set(defaultState);
+      set(def);
     }
   };
 }
 
-export const donutFilterState = createDonutFilterStateStore();
-export const areaAnalysisFilterState = createAreaAnalysisFilterStateStore();
+export const donutFltState = makeDonutFltStore();
+export const areaFltState = makeAreaFltStore();

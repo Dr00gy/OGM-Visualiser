@@ -2,34 +2,36 @@
   import { createEventDispatcher } from 'svelte';
   const dispatch = createEventDispatcher();
   const REFINEFINAL_NAME = 'exp_refineFinal1.xmap';
+  // The Bionano OGM toolchain produces folders literally named `contigs`,
+  // so this filesystem path is a fixed external convention — not renamed.
   const CONTIG_PATH = ['assembly', 'output', 'contigs', 'exp_refineFinal1', 'alignmol', 'merge'];
 
-  interface GenomeZone {
-    contigFiles: File[];
+  interface GenZone {
+    seqFiles: File[];
     refineFinalFile: File | null;
     dirName: string;
     dragging: boolean;
-    dragCounter: number;
+    dragCnt: number;
     missingRefineFinal: boolean;
   }
 
-  let zones: GenomeZone[] = [
-    { contigFiles: [], refineFinalFile: null, dirName: '', dragging: false, dragCounter: 0, missingRefineFinal: false },
-    { contigFiles: [], refineFinalFile: null, dirName: '', dragging: false, dragCounter: 0, missingRefineFinal: false },
+  let zones: GenZone[] = [
+    { seqFiles: [], refineFinalFile: null, dirName: '', dragging: false, dragCnt: 0, missingRefineFinal: false },
+    { seqFiles: [], refineFinalFile: null, dirName: '', dragging: false, dragCnt: 0, missingRefineFinal: false },
   ];
   let fileInputs: HTMLInputElement[] = [];
 
   function addZone() {
     if (zones.length < 3) {
-      zones = [...zones, { contigFiles: [], refineFinalFile: null, dirName: '', dragging: false, dragCounter: 0, missingRefineFinal: false }];
+      zones = [...zones, { seqFiles: [], refineFinalFile: null, dirName: '', dragging: false, dragCnt: 0, missingRefineFinal: false }];
     }
   }
 
-  function removeZone(index: number) {
-    zones = zones.filter((_, i) => i !== index);
+  function removeZone(idx: number) {
+    zones = zones.filter((_, i) => i !== idx);
   }
 
-  async function walkDirectory(
+  async function walkDir(
     dir: FileSystemDirectoryEntry,
     segments: string[]
   ): Promise<FileSystemDirectoryEntry | null> {
@@ -41,7 +43,7 @@
           (e) => e.isDirectory && e.name === first
         ) as FileSystemDirectoryEntry | undefined;
         if (match) {
-          walkDirectory(match, rest).then(resolve);
+          walkDir(match, rest).then(resolve);
         } else {
           resolve(null);
         }
@@ -49,7 +51,7 @@
     });
   }
 
-  async function collectXmapsFromDir(dir: FileSystemDirectoryEntry): Promise<File[]> {
+  async function collectXmaps(dir: FileSystemDirectoryEntry): Promise<File[]> {
     const files: File[] = [];
     const reader = dir.createReader();
     while (true) {
@@ -69,40 +71,40 @@
     return files;
   }
 
-  async function collectFromDirectory(dir: FileSystemDirectoryEntry): Promise<{
-    contigFiles: File[];
+  async function collectFromDir(dir: FileSystemDirectoryEntry): Promise<{
+    seqFiles: File[];
     refineFinalFile: File | null;
   }> {
-    const contigFiles: File[] = [];
+    const seqFiles: File[] = [];
     let refineFinalFile: File | null = null;
 
-    const contigDir = await walkDirectory(dir, CONTIG_PATH);
-    if (contigDir) {
-      const allFiles = await collectXmapsFromDir(contigDir);
+    const seqDir = await walkDir(dir, CONTIG_PATH);
+    if (seqDir) {
+      const allFiles = await collectXmaps(seqDir);
       for (const f of allFiles) {
         if (f.name !== REFINEFINAL_NAME) {
-          contigFiles.push(f);
+          seqFiles.push(f);
         }
       }
     }
 
-    const rootFiles = await collectXmapsFromDir(dir);
+    const rootFiles = await collectXmaps(dir);
     refineFinalFile = rootFiles.find(f => f.name === REFINEFINAL_NAME) ?? null;
 
-    return { contigFiles, refineFinalFile };
+    return { seqFiles, refineFinalFile };
   }
 
-  function handleChange(e: Event, zoneIndex: number) {
+  function onChange(e: Event, zoneIdx: number) {
     const input = e.target as HTMLInputElement;
     const fileList = input.files;
     if (!fileList || fileList.length === 0) return;
 
     const allFiles = Array.from(fileList);
-    const contigFiles: File[] = [];
+    const seqFiles: File[] = [];
     let refineFinalFile: File | null = null;
     let dirName = '';
 
-    const contigPathStr = CONTIG_PATH.join('/');
+    const seqPathStr = CONTIG_PATH.join('/');
 
     for (const f of allFiles) {
       const rel = (f as any).webkitRelativePath as string;
@@ -110,26 +112,26 @@
       const normalized = rel.replace(/\\/g, '/');
       const parts = normalized.split('/');
 
-      if (normalized.includes(contigPathStr) && f.name.endsWith('.xmap') && f.name !== REFINEFINAL_NAME) {
-        contigFiles.push(f);
+      if (normalized.includes(seqPathStr) && f.name.endsWith('.xmap') && f.name !== REFINEFINAL_NAME) {
+        seqFiles.push(f);
       } else if (parts.length === 2 && f.name === REFINEFINAL_NAME) {
         refineFinalFile = f;
       }
     }
 
-    zones[zoneIndex].contigFiles = contigFiles;
-    zones[zoneIndex].refineFinalFile = refineFinalFile;
-    zones[zoneIndex].dirName = dirName;
-    zones[zoneIndex].missingRefineFinal = refineFinalFile === null && contigFiles.length > 0;
+    zones[zoneIdx].seqFiles = seqFiles;
+    zones[zoneIdx].refineFinalFile = refineFinalFile;
+    zones[zoneIdx].dirName = dirName;
+    zones[zoneIdx].missingRefineFinal = refineFinalFile === null && seqFiles.length > 0;
     zones = [...zones];
     input.value = '';
   }
 
-  async function handleDrop(e: DragEvent, zoneIndex: number) {
+  async function onDrop(e: DragEvent, zoneIdx: number) {
     e.preventDefault();
     e.stopPropagation();
-    zones[zoneIndex].dragging = false;
-    zones[zoneIndex].dragCounter = 0;
+    zones[zoneIdx].dragging = false;
+    zones[zoneIdx].dragCnt = 0;
     zones = [...zones];
 
     const items = e.dataTransfer?.items;
@@ -138,14 +140,14 @@
     for (let i = 0; i < items.length; i++) {
       const entry = items[i].webkitGetAsEntry?.();
       if (entry?.isDirectory) {
-        const { contigFiles, refineFinalFile } = await collectFromDirectory(
+        const { seqFiles, refineFinalFile } = await collectFromDir(
           entry as FileSystemDirectoryEntry
         );
-        if (contigFiles.length > 0 || refineFinalFile) {
-          zones[zoneIndex].contigFiles = contigFiles;
-          zones[zoneIndex].refineFinalFile = refineFinalFile;
-          zones[zoneIndex].dirName = entry.name;
-          zones[zoneIndex].missingRefineFinal = refineFinalFile === null && contigFiles.length > 0;
+        if (seqFiles.length > 0 || refineFinalFile) {
+          zones[zoneIdx].seqFiles = seqFiles;
+          zones[zoneIdx].refineFinalFile = refineFinalFile;
+          zones[zoneIdx].dirName = entry.name;
+          zones[zoneIdx].missingRefineFinal = refineFinalFile === null && seqFiles.length > 0;
           zones = [...zones];
           break;
         }
@@ -153,41 +155,41 @@
     }
   }
 
-  function handleDragEnter(e: DragEvent, zoneIndex: number) {
+  function onDragEnter(e: DragEvent, zoneIdx: number) {
     e.preventDefault();
     e.stopPropagation();
-    zones[zoneIndex].dragCounter++;
-    zones[zoneIndex].dragging = true;
+    zones[zoneIdx].dragCnt++;
+    zones[zoneIdx].dragging = true;
     zones = [...zones];
   }
 
-  function handleDragOver(e: DragEvent) {
+  function onDragOver(e: DragEvent) {
     e.preventDefault();
     e.stopPropagation();
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
   }
 
-  function handleDragLeave(e: DragEvent, zoneIndex: number) {
+  function onDragLeave(e: DragEvent, zoneIdx: number) {
     e.preventDefault();
     e.stopPropagation();
-    zones[zoneIndex].dragCounter--;
-    if (zones[zoneIndex].dragCounter === 0) zones[zoneIndex].dragging = false;
+    zones[zoneIdx].dragCnt--;
+    if (zones[zoneIdx].dragCnt === 0) zones[zoneIdx].dragging = false;
     zones = [...zones];
   }
 
-  function handleSubmit() {
-    const populated = zones.filter(z => z.contigFiles.length > 0 && z.refineFinalFile !== null);
+  function onSubmit() {
+    const populated = zones.filter(z => z.seqFiles.length > 0 && z.refineFinalFile !== null);
     if (populated.length < 2) return;
     dispatch('upload', populated.map(z => ({
-      contigFiles: z.contigFiles,
+      seqFiles: z.seqFiles,
       refineFinalFile: z.refineFinalFile!,
       dirName: z.dirName,
     })));
   }
 
-  $: canSubmit = zones.filter(z => z.contigFiles.length > 0 && z.refineFinalFile !== null).length >= 2;
+  $: canSubmit = zones.filter(z => z.seqFiles.length > 0 && z.refineFinalFile !== null).length >= 2;
   $: zoneColors = ['#3b82f6', '#10b981', '#f59e0b'];
-  $: hasAnyFiles = (z: GenomeZone) => z.contigFiles.length > 0 || z.refineFinalFile !== null;
+  $: hasAnyFiles = (z: GenZone) => z.seqFiles.length > 0 || z.refineFinalFile !== null;
 </script>
 
 <div class="uploader">
@@ -198,10 +200,10 @@
         class:dragging={zone.dragging}
         class:filled={hasAnyFiles(zone)}
         style="--zone-color: {zoneColors[i]}"
-        on:dragenter={(e) => handleDragEnter(e, i)}
-        on:dragover={handleDragOver}
-        on:dragleave={(e) => handleDragLeave(e, i)}
-        on:drop={(e) => handleDrop(e, i)}
+        on:dragenter={(e) => onDragEnter(e, i)}
+        on:dragover={onDragOver}
+        on:dragleave={(e) => onDragLeave(e, i)}
+        on:drop={(e) => onDrop(e, i)}
         role="region"
         aria-label="Genome {i + 1} upload zone"
       >
@@ -210,7 +212,7 @@
           type="file"
           webkitdirectory
           multiple
-          on:change={(e) => handleChange(e, i)}
+          on:change={(e) => onChange(e, i)}
           style="display: none;"
         />
         <div class="zone-label">Genome {i + 1}</div>
@@ -223,7 +225,7 @@
                 <path d="M16 10v7M16 21v1.5" stroke="#f59e0b" stroke-width="2.5" stroke-linecap="round"/>
               </svg>
               <p class="dir-name">{zone.dirName}</p>
-              <p class="file-count warn">{zone.contigFiles.length} contig file{zone.contigFiles.length !== 1 ? 's' : ''}</p>
+              <p class="file-count warn">{zone.seqFiles.length} sequence file{zone.seqFiles.length !== 1 ? 's' : ''}</p>
               <p class="missing-warning">Missing exp_refineFinal1.xmap</p>
             {:else}
               <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
@@ -231,7 +233,7 @@
                 <path d="M9 16l5 5 9-9" stroke="var(--zone-color)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
               </svg>
               <p class="dir-name">{zone.dirName}</p>
-              <p class="file-count">{zone.contigFiles.length} contig file{zone.contigFiles.length !== 1 ? 's' : ''}</p>
+              <p class="file-count">{zone.seqFiles.length} sequence file{zone.seqFiles.length !== 1 ? 's' : ''}</p>
               <p class="refinefinal-ok">✓ exp_refineFinal1.xmap</p>
             {/if}
             <button class="change-btn" on:click={() => fileInputs[i].click()}>Change folder</button>
@@ -267,7 +269,7 @@
     {:else}
       <div></div>
     {/if}
-    <button class="submit-btn" disabled={!canSubmit} on:click={handleSubmit}>
+    <button class="submit-btn" disabled={!canSubmit} on:click={onSubmit}>
       Run Matching
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
         <path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>

@@ -7,31 +7,31 @@
 
   export let options: number[] = [];
   export let value: string = '';
-  export let id: string = 'contig-picker';
-  export let placeholder: string = 'Type or pick a contig ID…';
+  export let id: string = 'seq-picker';
+  export let placeholder: string = 'Type or pick a sequence ID…';
 
   // -------------------------------------------------------------------------
   // Internal state
   // -------------------------------------------------------------------------
 
-  let inputText: string = value;
-  let dropdownOpen: boolean = false;
+  let inText: string = value;
+  let dropOpen: boolean = false;
   let rootEl: HTMLDivElement;
   let scrollEl: HTMLDivElement;
   let scrollTop: number = 0;
 
-  const ITEM_HEIGHT = 28;
-  const SCROLL_HEIGHT = 280;
-  const WINDOW_SIZE = Math.ceil(SCROLL_HEIGHT / ITEM_HEIGHT) * 3;
+  const ITEM_H = 28;
+  const SCROLL_H = 280;
+  const WIN_SIZE = Math.ceil(SCROLL_H / ITEM_H) * 3;
 
   // -------------------------------------------------------------------------
   // Keep input synced when `value` changes from outside
   // -------------------------------------------------------------------------
 
   $: if (typeof document !== 'undefined' &&
-         value !== inputText &&
+         value !== inText &&
          document.activeElement !== inputRef) {
-    inputText = value;
+    inText = value;
   }
 
   let inputRef: HTMLInputElement | null = null;
@@ -41,23 +41,23 @@
   // -------------------------------------------------------------------------
 
   $: filtered = (() => {
-    const q = inputText.trim();
+    const q = inText.trim();
     if (q === '') return options;
     const out: number[] = [];
-    for (const id of options) {
-      if (id.toString().includes(q)) out.push(id);
+    for (const sid of options) {
+      if (sid.toString().includes(q)) out.push(sid);
     }
     return out;
   })();
 
   $: suggestions = (() => {
-    const q = inputText.trim();
+    const q = inText.trim();
     if (q === '' || filtered.length === 0) return [] as number[];
 
     const prefix: number[] = [];
-    for (const id of filtered) {
-      if (id.toString().startsWith(q)) {
-        prefix.push(id);
+    for (const sid of filtered) {
+      if (sid.toString().startsWith(q)) {
+        prefix.push(sid);
         if (prefix.length >= 5) break;
       }
     }
@@ -69,40 +69,40 @@
   // Virtualization windowing
   // -------------------------------------------------------------------------
 
-  $: windowStart = (() => {
-    const viewportFirst = Math.floor(scrollTop / ITEM_HEIGHT);
-    const pad = Math.floor((WINDOW_SIZE - SCROLL_HEIGHT / ITEM_HEIGHT) / 2);
-    return Math.max(0, viewportFirst - pad);
+  $: winStart = (() => {
+    const vpFirst = Math.floor(scrollTop / ITEM_H);
+    const pad = Math.floor((WIN_SIZE - SCROLL_H / ITEM_H) / 2);
+    return Math.max(0, vpFirst - pad);
   })();
 
-  $: windowItems = filtered.slice(windowStart, windowStart + WINDOW_SIZE);
-  $: totalHeight = filtered.length * ITEM_HEIGHT;
-  $: windowOffset = windowStart * ITEM_HEIGHT;
+  $: winItems = filtered.slice(winStart, winStart + WIN_SIZE);
+  $: totH = filtered.length * ITEM_H;
+  $: winOff = winStart * ITEM_H;
 
   // -------------------------------------------------------------------------
   // Handlers
   // -------------------------------------------------------------------------
 
-  function handleInputFocus() {
-    dropdownOpen = true;
+  function onInFocus() {
+    dropOpen = true;
   }
 
-  function handleInputChange() {
+  function onInChange() {
     scrollTop = 0;
     if (scrollEl) scrollEl.scrollTop = 0;
   }
 
-  function commit(id: number) {
-    inputText = id.toString();
-    value = inputText;
-    dropdownOpen = false;
+  function commit(sid: number) {
+    inText = sid.toString();
+    value = inText;
+    dropOpen = false;
   }
 
-  function handleInputBlur(e: FocusEvent) {
+  function onInBlur(e: FocusEvent) {
     const next = e.relatedTarget as HTMLElement | null;
     if (rootEl && next && rootEl.contains(next)) return;
 
-    const typed = inputText.trim();
+    const typed = inText.trim();
     if (typed === '') {
       value = '';
     } else {
@@ -110,57 +110,57 @@
       if (!Number.isNaN(n) && n >= 0) {
         value = n.toString();
       } else {
-        inputText = value;
+        inText = value;
       }
     }
-    dropdownOpen = false;
+    dropOpen = false;
   }
 
-  function handleKeyDown(e: KeyboardEvent) {
+  function onKeyDown(e: KeyboardEvent) {
     if (e.key === 'Escape') {
-      dropdownOpen = false;
+      dropOpen = false;
       inputRef?.blur();
     } else if (e.key === 'Enter') {
       if (suggestions.length >= 1) {
         commit(suggestions[0]);
         inputRef?.blur();
       } else {
-        handleInputBlur(new FocusEvent('blur'));
+        onInBlur(new FocusEvent('blur'));
         inputRef?.blur();
       }
     }
   }
 
-  function handleClear() {
-    inputText = '';
+  function onClear() {
+    inText = '';
     value = '';
     scrollTop = 0;
     if (scrollEl) scrollEl.scrollTop = 0;
     inputRef?.focus();
   }
 
-  function handleScroll() {
+  function onScroll() {
     if (!scrollEl) return;
     scrollTop = scrollEl.scrollTop;
   }
 
-  function handleDocumentClick(e: MouseEvent) {
+  function onDocClick(e: MouseEvent) {
     if (rootEl && !rootEl.contains(e.target as Node)) {
-      dropdownOpen = false;
+      dropOpen = false;
     }
   }
 
   $: if (typeof document !== 'undefined') {
-    if (dropdownOpen) {
-      document.addEventListener('click', handleDocumentClick, { capture: true });
+    if (dropOpen) {
+      document.addEventListener('click', onDocClick, { capture: true });
     } else {
-      document.removeEventListener('click', handleDocumentClick, { capture: true });
+      document.removeEventListener('click', onDocClick, { capture: true });
     }
   }
 
   onDestroy(() => {
     if (typeof document !== 'undefined') {
-      document.removeEventListener('click', handleDocumentClick, { capture: true });
+      document.removeEventListener('click', onDocClick, { capture: true });
     }
   });
 </script>
@@ -174,18 +174,18 @@
       inputmode="numeric"
       class="picker-input"
       {placeholder}
-      bind:value={inputText}
-      on:focus={handleInputFocus}
-      on:input={handleInputChange}
-      on:blur={handleInputBlur}
-      on:keydown={handleKeyDown}
+      bind:value={inText}
+      on:focus={onInFocus}
+      on:input={onInChange}
+      on:blur={onInBlur}
+      on:keydown={onKeyDown}
       autocomplete="off"
     />
     {#if value !== ''}
       <button
         type="button"
         class="picker-clear"
-        on:click={handleClear}
+        on:click={onClear}
         title="Clear"
         tabindex="-1"
       >
@@ -194,7 +194,7 @@
     {/if}
   </div>
 
-  {#if dropdownOpen && options.length > 0}
+  {#if dropOpen && options.length > 0}
     <div class="picker-dropdown" role="listbox">
       {#if suggestions.length > 0}
         <div class="picker-suggestions">
@@ -214,22 +214,22 @@
       <div
         class="picker-scroll"
         bind:this={scrollEl}
-        on:scroll={handleScroll}
+        on:scroll={onScroll}
       >
-        <div class="picker-spacer" style="height: {totalHeight}px;">
+        <div class="picker-spacer" style="height: {totH}px;">
           <div
             class="picker-window"
-            style="transform: translateY({windowOffset}px);"
+            style="transform: translateY({winOff}px);"
           >
-            {#each windowItems as id (id)}
+            {#each winItems as sid (sid)}
               <button
                 type="button"
                 class="picker-item"
-                class:active={value === id.toString()}
-                on:click={() => commit(id)}
-                style="height: {ITEM_HEIGHT}px;"
+                class:active={value === sid.toString()}
+                on:click={() => commit(sid)}
+                style="height: {ITEM_H}px;"
               >
-                {id}
+                {sid}
               </button>
             {/each}
           </div>
@@ -238,7 +238,7 @@
 
       <div class="picker-footer">
         {filtered.length.toLocaleString()} of {options.length.toLocaleString()}
-        {inputText ? 'matching' : 'total'}
+        {inText ? 'matching' : 'total'}
       </div>
     </div>
   {/if}

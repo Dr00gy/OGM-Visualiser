@@ -6,7 +6,7 @@
     type ChromosomeInfo,
   } from '$lib/bincodeDecoder';
   import { darkMode } from '$lib/darkModeStore';
-  import { donutFilterState } from '$lib/filterStateStore';
+  import { donutFltState } from '$lib/filterStateStore';
   import { resetSearchStore } from '$lib/searchStore';
   import FileUpload from './FileUpload.svelte';
   import ErrorBanner from './ErrorBanner.svelte';
@@ -16,142 +16,142 @@
   import DonutVisualisation from './DonutVisualisation.svelte';
   import DisplayControls from './DisplayControls.svelte';
   let AreaAnalysis: any = null;
-  let loadingAreaAnalysis = false;
+  let loadingArea = false;
 
-  interface GenomeData {
+  interface GenData {
     name: string;
-    fileCount: number;
+    fileCnt: number;
     rows: number;
     color: string;
   }
 
-  const GENOME_COLORS = ['#3b82f6', '#10b981', '#f59e0b'];
-  let genomes: GenomeData[] = [];
-  let fileToGenome: number[] = [];
+  const GEN_COLORS = ['#3b82f6', '#10b981', '#f59e0b'];
+  let genomes: GenData[] = [];
+  let fileToGen: number[] = [];
   let matches: BackendMatch[] = [];
-  let genomeRowCounts: number[] = [];//TODO:
-  let chromosomeInfo: ChromosomeInfo[][] = [];
+  let genRowCnts: number[] = [];
+  let chrInfo: ChromosomeInfo[][] = [];
 
   let isLoading = false;
   let loadingText = 'Initialising stream...';
 
-  let sessionId: string | null = null;
-  let isStreaming = false;//TODO:
+  let sessId: string | null = null;
+  let isStreaming = false;
   let error = '';
 
-  let matchCount = 0;
-  let recordCount = 0;
-  let distinctContigCount = 0;
-  let abortController: AbortController | null = null;
-  let showDuplicates = false;
+  let mtcCnt = 0;
+  let recCnt = 0;
+  let distSeqCnt = 0;
+  let abortCtrl: AbortController | null = null;
+  let showDups = false;
 
-  let activeTab: 'visualization' | 'analysis' = 'visualization';
+  let activeTab: 'viz' | 'anlys' = 'viz';
   let hasUploadedFiles = false;
-  let hasChromosomeInfo = false;
+  let hasChrInfo = false;
   let streamComplete = false;
 
   onMount(() => {
     document.documentElement.classList.toggle('dark', $darkMode);
   });
 
-  async function loadAreaAnalysis() {
-    if (AreaAnalysis || loadingAreaAnalysis) return;
-    loadingAreaAnalysis = true;
+  async function loadArea() {
+    if (AreaAnalysis || loadingArea) return;
+    loadingArea = true;
     try {
-      const module = await import('./AreaAnalysis.svelte');
-      AreaAnalysis = module.default;
+      const mod = await import('./AreaAnalysis.svelte');
+      AreaAnalysis = mod.default;
     } catch (err) {
       console.error('Failed to load AreaAnalysis:', err);
     } finally {
-      loadingAreaAnalysis = false;
+      loadingArea = false;
     }
   }
 
-  $: if (activeTab === 'analysis' && streamComplete) {
-    loadAreaAnalysis();
+  $: if (activeTab === 'anlys' && streamComplete) {
+    loadArea();
   }
 
-  async function handleFileUpload(genomeGroups: { contigFiles: File[]; refineFinalFile: File; dirName: string }[]) {
-    if (!genomeGroups || genomeGroups.length < 2) return;
+  async function onFileUpload(genGroups: { seqFiles: File[]; refineFinalFile: File; dirName: string }[]) {
+    if (!genGroups || genGroups.length < 2) return;
 
-    if (abortController) {
-      abortController.abort();
+    if (abortCtrl) {
+      abortCtrl.abort();
     }
 
-    if (sessionId) {
-      const oldId = sessionId;
+    if (sessId) {
+      const oldId = sessId;
       void fetch(`http://localhost:8080/api/session/${oldId}`, {
         method: 'DELETE',
       }).catch(() => { /* ignore cleanup failures */ });
-      sessionId = null;
+      sessId = null;
     }
 
-    abortController = new AbortController();
+    abortCtrl = new AbortController();
     isLoading = true;
     isStreaming = true;
     streamComplete = false;
     error = '';
     matches = [];
-    chromosomeInfo = [];
-    matchCount = 0;
-    recordCount = 0;
-    distinctContigCount = 0;
+    chrInfo = [];
+    mtcCnt = 0;
+    recCnt = 0;
+    distSeqCnt = 0;
     hasUploadedFiles = false;
-    hasChromosomeInfo = false;
+    hasChrInfo = false;
 
-    donutFilterState.reset();
+    donutFltState.reset();
     resetSearchStore();
 
-    genomes = genomeGroups.map((g, i) => ({
+    genomes = genGroups.map((g, i) => ({
       name: g.dirName,
-      fileCount: g.contigFiles.length,
+      fileCnt: g.seqFiles.length,
       rows: 0,
-      color: GENOME_COLORS[i],
+      color: GEN_COLORS[i],
     }));
 
-    genomeRowCounts = new Array(genomes.length).fill(0);
+    genRowCnts = new Array(genomes.length).fill(0);
 
-    fileToGenome = genomeGroups.flatMap((g, gi) =>
-      Array.from({ length: g.contigFiles.length }, () => gi)
+    fileToGen = genGroups.flatMap((g, gi) =>
+      Array.from({ length: g.seqFiles.length }, () => gi)
     );
 
     try {
       loadingText = 'Creating session...';
-      const sessionResp = await fetch('http://localhost:8080/api/session', {
+      const sessResp = await fetch('http://localhost:8080/api/session', {
         method: 'POST',
-        signal: abortController.signal,
+        signal: abortCtrl.signal,
       });
-      if (!sessionResp.ok) {
-        throw new Error(`Session create failed: ${sessionResp.status} ${sessionResp.statusText}`);
+      if (!sessResp.ok) {
+        throw new Error(`Session create failed: ${sessResp.status} ${sessResp.statusText}`);
       }
-      const { session_id } = await sessionResp.json() as { session_id: string };
-      sessionId = session_id;
+      const { session_id } = await sessResp.json() as { session_id: string };
+      sessId = session_id;
 
-      type UploadJob = { fieldName: string; file: File };
-      const jobs: UploadJob[] = [];
-      genomeGroups.forEach((group, gi) => {
+      type UpJob = { fieldName: string; file: File };
+      const jobs: UpJob[] = [];
+      genGroups.forEach((group, gi) => {
         jobs.push({ fieldName: `g${gi}_r`, file: group.refineFinalFile });
-        group.contigFiles.forEach((file, fi) => {
-          jobs.push({ fieldName: `g${gi}_c${fi}`, file });
+        group.seqFiles.forEach((file, fi) => {
+          jobs.push({ fieldName: `g${gi}_s${fi}`, file });
         });
       });
-      const totalJobs = jobs.length;
-      let completedJobs = 0;
+      const totJobs = jobs.length;
+      let doneJobs = 0;
 
-      loadingText = `Uploading files (0/${totalJobs})...`;
+      loadingText = `Uploading files (0/${totJobs})...`;
 
-      const UPLOAD_CONCURRENCY = 3;
+      const UP_CONCURRENCY = 3;
 
-      async function uploadOne(job: UploadJob): Promise<void> {
+      async function upOne(job: UpJob): Promise<void> {
         const fd = new FormData();
         fd.append(job.fieldName, job.file);
 
         const resp = await fetch(
-          `http://localhost:8080/api/upload/${sessionId}`,
+          `http://localhost:8080/api/upload/${sessId}`,
           {
             method: 'POST',
             body: fd,
-            signal: abortController?.signal,
+            signal: abortCtrl?.signal,
           }
         );
         if (!resp.ok) {
@@ -159,50 +159,50 @@
             `Upload failed for ${job.fieldName}: ${resp.status} ${resp.statusText}`
           );
         }
-        completedJobs++;
-        loadingText = `Uploading files (${completedJobs}/${totalJobs})...`;
+        doneJobs++;
+        loadingText = `Uploading files (${doneJobs}/${totJobs})...`;
       }
 
       let nextJobIdx = 0;
       async function worker(): Promise<void> {
         while (true) {
-          if (abortController?.signal.aborted) return;
+          if (abortCtrl?.signal.aborted) return;
           const myIdx = nextJobIdx++;
           if (myIdx >= jobs.length) return;
-          await uploadOne(jobs[myIdx]);
+          await upOne(jobs[myIdx]);
         }
       }
 
       await Promise.all(
-        Array.from({ length: Math.min(UPLOAD_CONCURRENCY, jobs.length) }, () => worker())
+        Array.from({ length: Math.min(UP_CONCURRENCY, jobs.length) }, () => worker())
       );
 
-      if (abortController.signal.aborted) {
+      if (abortCtrl.signal.aborted) {
         throw new DOMException('Upload cancelled', 'AbortError');
       }
 
       loadingText = 'Starting match...';
-      const response = await fetch(
-        `http://localhost:8080/api/match/${sessionId}`,
+      const resp = await fetch(
+        `http://localhost:8080/api/match/${sessId}`,
         {
           method: 'POST',
-          signal: abortController.signal,
+          signal: abortCtrl.signal,
         }
       );
 
-      if (!response.ok) {
-        throw new Error(`Server error: ${response.status} ${response.statusText}`);
+      if (!resp.ok) {
+        throw new Error(`Server error: ${resp.status} ${resp.statusText}`);
       }
       let gotComplete = false;
 
-      for await (const frame of processMatchStream(response)) {
-        if (abortController?.signal.aborted) break;
+      for await (const frame of processMatchStream(resp)) {
+        if (abortCtrl?.signal.aborted) break;
 
         switch (frame.type) {
           case 'chromosomeInfo': {
-            if (chromosomeInfo.length === 0) {
-              chromosomeInfo = frame.chromosomeInfo;
-              hasChromosomeInfo = true;
+            if (chrInfo.length === 0) {
+              chrInfo = frame.chromosomeInfo;
+              hasChrInfo = true;
               hasUploadedFiles = true;
               isLoading = false;
             }
@@ -210,18 +210,18 @@
           }
 
           case 'progress': {
-            matchCount  = frame.progress.total_matches;
-            recordCount = frame.progress.total_records;
-            updateGenomeCountsFromBackend(frame.progress.per_genome_records);
+            mtcCnt = frame.progress.total_matches;
+            recCnt = frame.progress.total_records;
+            updateGenCntsFromBE(frame.progress.per_genome_records);
             await new Promise(resolve => setTimeout(resolve, 0));
             break;
           }
 
           case 'complete': {
-            matchCount          = frame.complete.total_matches;
-            recordCount         = frame.complete.total_records;
-            distinctContigCount = frame.complete.distinct_contig_count;
-            updateGenomeCountsFromBackend(frame.complete.per_genome_records);
+            mtcCnt = frame.complete.total_matches;
+            recCnt = frame.complete.total_records;
+            distSeqCnt = frame.complete.distinct_sequence_count;
+            updateGenCntsFromBE(frame.complete.per_genome_records);
             gotComplete = true;
             break;
           }
@@ -242,56 +242,56 @@
         error = 'Unknown error occurred';
       }
 
-      if (sessionId) {
-        void fetch(`http://localhost:8080/api/session/${sessionId}`, {
+      if (sessId) {
+        void fetch(`http://localhost:8080/api/session/${sessId}`, {
           method: 'DELETE',
         }).catch(() => { /* ignore cleanup failures */ });
-        sessionId = null;
+        sessId = null;
       }
     } finally {
       isLoading = false;
       isStreaming = false;
-      abortController = null;
+      abortCtrl = null;
       loadingText = 'Initialising stream...';
     }
   }
 
   function resetUpload() {
     genomes = [];
-    genomeRowCounts = [];
-    fileToGenome = [];
+    genRowCnts = [];
+    fileToGen = [];
     matches = [];
-    chromosomeInfo = [];
+    chrInfo = [];
     error = '';
-    matchCount = 0;
-    recordCount = 0;
-    distinctContigCount = 0;
+    mtcCnt = 0;
+    recCnt = 0;
+    distSeqCnt = 0;
     hasUploadedFiles = false;
-    hasChromosomeInfo = false;
+    hasChrInfo = false;
     streamComplete = false;
-    if (abortController) {
-      abortController.abort();
-      abortController = null;
+    if (abortCtrl) {
+      abortCtrl.abort();
+      abortCtrl = null;
     }
-    if (sessionId) {
-      void fetch(`http://localhost:8080/api/session/${sessionId}`, {
+    if (sessId) {
+      void fetch(`http://localhost:8080/api/session/${sessId}`, {
         method: 'DELETE',
       }).catch(() => { /* ignore cleanup failures */ });
-      sessionId = null;
+      sessId = null;
     }
   }
 
-  function updateGenomeCountsFromBackend(perGenomeRecords: number[]) {
-    genomeRowCounts = genomes.map((_, i) => perGenomeRecords[i] ?? 0);
+  function updateGenCntsFromBE(perGenRecs: number[]) {
+    genRowCnts = genomes.map((_, i) => perGenRecs[i] ?? 0);
     genomes = genomes.map((g, i) => ({
       ...g,
-      rows: perGenomeRecords[i] ?? 0,
+      rows: perGenRecs[i] ?? 0,
     }));
   }
 
   function cancelUpload() {
-    if (abortController) {
-      abortController.abort();
+    if (abortCtrl) {
+      abortCtrl.abort();
     }
   }
 </script>
@@ -314,11 +314,11 @@
   </div>
 
   <TabNav bind:activeTab />
-  {#if activeTab === 'visualization'}
+  {#if activeTab === 'viz'}
     <div class="tab-content">
       {#if !hasUploadedFiles && !isLoading}
         <FileUpload
-          on:upload={(e) => handleFileUpload(e.detail)}
+          on:upload={(e) => onFileUpload(e.detail)}
           on:cancel={cancelUpload}
         />
       {/if}
@@ -334,15 +334,15 @@
         </div>
       {/if}
 
-      {#if isStreaming && hasChromosomeInfo}
+      {#if isStreaming && hasChrInfo}
         <div class="streaming-banner">
           <div class="streaming-spinner"></div>
           <span>
             Processing matches...
-            {matchCount.toLocaleString()} matches
-            / {recordCount.toLocaleString()} records
-            {#if streamComplete && distinctContigCount > 0}
-              / {distinctContigCount.toLocaleString()} unique contigs
+            {mtcCnt.toLocaleString()} matches
+            / {recCnt.toLocaleString()} records
+            {#if streamComplete && distSeqCnt > 0}
+              / {distSeqCnt.toLocaleString()} unique sequences
             {/if}
           </span>
           {#if !streamComplete}
@@ -353,22 +353,22 @@
         </div>
       {/if}
 
-      {#if hasChromosomeInfo}
-        <DisplayControls bind:showDuplicates/>
+      {#if hasChrInfo}
+        <DisplayControls bind:showDups/>
         <DonutVisualisation
           files={genomes}
-          {fileToGenome}
+          {fileToGen}
           {matches}
-          {chromosomeInfo}
-          {showDuplicates}
-          {sessionId}
-          isQueryable={streamComplete && sessionId !== null}
+          {chrInfo}
+          {showDups}
+          {sessId}
+          isQueryable={streamComplete && sessId !== null}
           isStreaming={isStreaming && !streamComplete}
         />
       {/if}
     </div>
 
-  {:else if activeTab === 'analysis'}
+  {:else if activeTab === 'anlys'}
     <div class="tab-content">
       {#if streamComplete}
         {#if AreaAnalysis}
@@ -376,12 +376,12 @@
             this={AreaAnalysis}
             {matches}
             files={genomes}
-            {fileToGenome}
-            {chromosomeInfo}
-            {sessionId}
-            isQueryable={streamComplete && sessionId !== null}
+            {fileToGen}
+            {chrInfo}
+            {sessId}
+            isQueryable={streamComplete && sessId !== null}
           />
-        {:else if loadingAreaAnalysis}
+        {:else if loadingArea}
           <div class="placeholder-tab">
             <div class="streaming-placeholder">
               <LoadingSpinner />
@@ -401,7 +401,7 @@
           <h2>Analysis Tab</h2>
           <div class="streaming-placeholder">
             <LoadingSpinner />
-            <p>Loading data... {matchCount.toLocaleString()} matches so far</p>
+            <p>Loading data... {mtcCnt.toLocaleString()} matches so far</p>
           </div>
         </div>
       {:else}
