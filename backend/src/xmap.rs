@@ -1,39 +1,20 @@
 use std::sync::Arc;
 use std::path::Path;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Cursor, Read};
+use std::io::{BufRead, BufReader, Read};
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use dashmap::DashMap;
 use crossbeam::channel;
 use crossbeam::queue::SegQueue;
 use rustc_hash::FxHashMap;
 
-pub type RecordVec = Vec<XmapRecord>;
-pub type QryIndex = FxHashMap<u32, Vec<u32>>;
-pub type RefLenMap = FxHashMap<u32, f64>;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct XmapRecord {
-    pub xmap_entry_id: u32,
-    pub qry_contig_id: u32,
-    pub ref_contig_id: u32,
-    pub qry_start_pos: f64,
-    pub qry_end_pos: f64,
-    pub ref_start_pos: f64,
-    pub ref_end_pos: f64,
-    pub confidence: f64,
-    pub is_forward: bool,
-}
-
-impl XmapRecord {
-    #[inline]
-    pub fn orientation_char(&self) -> char {
-        if self.is_forward { '+' } else { '-' }
-    }
-}
+/// One xmap row reduced to what the matcher needs: the query-sequence id.
+/// Other columns (positions, confidence, orientation) are read from the
+/// refineFinal file at match time and are not retained from the xmap.
+pub type XmapQryIds = Vec<u32>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChromosomeInfo {
@@ -53,20 +34,37 @@ pub struct RefineFinalRecord {
     pub ref_len: f64,
 }
 
+/// One alignment row, with chromosome/position resolved from the genome's
+/// refineFinal lookup. `file_index` is the flat index across all genomes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MatchedRecord {
+    pub file_index: usize,
+    pub ref_contig_id: u8,
+    pub qry_start_pos: f64,
+    pub qry_end_pos: f64,
+    pub ref_start_pos: f64,
+    pub ref_end_pos: f64,
+    pub orientation: char,
+    pub confidence: f64,
+    pub ref_len: f64,
+}
+
+/// One resolved match for a single qry sequence id, ready to push into the store.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XmapMatch {
+    pub qry_contig_id: u32,
+    pub file_indices: Box<[usize]>,
+    pub records: Box<[MatchedRecord]>,
+}
+
 pub fn parse_refinefinal(
     path: &Path,
-) -> Result<(
-    std::collections::HashMap<u32, Vec<RefineFinalRecord>>,
-    std::collections::HashMap<u8, f64>,
-), String> {
-    use std::io::{BufRead, BufReader};
-    use std::fs::File;
-
+) -> Result<(HashMap<u32, Vec<RefineFinalRecord>>, HashMap<u8, f64>), String> {
     let file = File::open(path).map_err(|e| format!("Open refineFinal: {}", e))?;
     let reader = BufReader::with_capacity(64 * 1024, file);
 
-    let mut lookup: std::collections::HashMap<u32, Vec<RefineFinalRecord>> = std::collections::HashMap::new();
-    let mut chr_lengths: std::collections::HashMap<u8, f64> = std::collections::HashMap::new();
+    let mut lookup: HashMap<u32, Vec<RefineFinalRecord>> = HashMap::new();
+    let mut chr_lengths: HashMap<u8, f64> = HashMap::new();
 
     for line_result in reader.lines() {
         let line = line_result.map_err(|e| format!("Read error: {}", e))?;
@@ -91,74 +89,31 @@ pub fn parse_refinefinal(
 
         chr_lengths.insert(chromosome, ref_len);
 
-        let confidence: f64 = fields[8]
-            .parse()
-            .map_err(|e| format!("Parse Confidence in refineFinal: {}", e))?;
-
         lookup.entry(qry_contig_id).or_default().push(RefineFinalRecord {
             chromosome,
-            qry_start_pos: fields[3]
-                .parse()
-                .map_err(|e| format!("Parse QryStartPos in refineFinal: {}", e))?,
-            qry_end_pos: fields[4]
-                .parse()
-                .map_err(|e| format!("Parse QryEndPos in refineFinal: {}", e))?,
-            ref_start_pos: fields[5]
-                .parse()
-                .map_err(|e| format!("Parse RefStartPos in refineFinal: {}", e))?,
-            ref_end_pos: fields[6]
-                .parse()
-                .map_err(|e| format!("Parse RefEndPos in refineFinal: {}", e))?,
-            orientation: fields[7].chars().next().unwrap_or('+'),
-            confidence,
+            qry_start_pos: fields[3].parse().map_err(|e| format!("Parse QryStartPos: {}", e))?,
+            qry_end_pos:   fields[4].parse().map_err(|e| format!("Parse QryEndPos: {}", e))?,
+            ref_start_pos: fields[5].parse().map_err(|e| format!("Parse RefStartPos: {}", e))?,
+            ref_end_pos:   fields[6].parse().map_err(|e| format!("Parse RefEndPos: {}", e))?,
+            orientation:   fields[7].chars().next().unwrap_or('+'),
+            confidence:    fields[8].parse().map_err(|e| format!("Parse Confidence: {}", e))?,
             ref_len,
         });
     }
     Ok((lookup, chr_lengths))
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct XmapMatch {
-    pub qry_contig_id: u32,
-    pub file_indices: Box<[usize]>,
-    pub records: Box<[MatchedRecord]>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RecordChunk {
-    pub qry_contig_id: u32,
-    pub file_indices: Box<[usize]>,
-    pub records: Box<[MatchedRecord]>,
-    pub chunk_index: usize,
-    pub total_chunks: usize,
-}
-
-/// One alignment row, with chromosome/position resolved from the genome's
-/// refineFinal lookup. `file_index` is the flat index across all genomes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MatchedRecord {
-    pub file_index: usize,
-    pub ref_contig_id: u8,
-    pub qry_start_pos: f64,
-    pub qry_end_pos: f64,
-    pub ref_start_pos: f64,
-    pub ref_end_pos: f64,
-    pub orientation: char,
-    pub confidence: f64,
-    pub ref_len: f64,
-}
-
-/// Streaming parser over an in-memory `Bytes` buffer. On success, the parsed
-/// records and chromosome lengths are inserted into `cache` under `hash`.
-pub fn parse_xmap_streaming(
-    bytes: &Bytes,
+/// Parse an xmap file and extract just the qry_contig_id column. Result is
+/// cached in `cache` keyed by `hash`.
+pub fn parse_xmap_disk(
+    path: &Path,
     hash: u64,
     cache: &XmapCache,
-) -> Result<(Arc<RecordVec>, Arc<RefLenMap>), String> {
-    let mut records: RecordVec = Vec::new();
-    let mut chromosome_lengths: RefLenMap = FxHashMap::default();
-    let cursor = Cursor::new(bytes);
-    let reader = BufReader::new(cursor);
+) -> Result<Arc<XmapQryIds>, String> {
+    let file = File::open(path).map_err(|e| format!("Open file: {}", e))?;
+    let reader = BufReader::with_capacity(64 * 1024, file);
+
+    let mut qry_ids: XmapQryIds = Vec::new();
 
     for line_result in reader.lines() {
         let line = line_result.map_err(|e| format!("Read error: {}", e))?;
@@ -171,166 +126,88 @@ pub fn parse_xmap_streaming(
             continue;
         }
 
-        let ref_contig_id: u32 = fields[2]
+        let qry: u32 = fields[1]
             .parse()
-            .map_err(|e| format!("Parse RefContigID: {}", e))?;
-        let ref_len: f64 = fields[11]
-            .parse()
-            .map_err(|e| format!("Parse RefLen: {}", e))?;
-        chromosome_lengths.insert(ref_contig_id, ref_len);
-
-        records.push(XmapRecord {
-            xmap_entry_id: fields[0]
-                .parse()
-                .map_err(|e| format!("Parse XmapEntryID: {}", e))?,
-            qry_contig_id: fields[1]
-                .parse()
-                .map_err(|e| format!("Parse QryContigID: {}", e))?,
-            ref_contig_id,
-            qry_start_pos: fields[3]
-                .parse()
-                .map_err(|e| format!("Parse QryStartPos: {}", e))?,
-            qry_end_pos: fields[4]
-                .parse()
-                .map_err(|e| format!("Parse QryEndPos: {}", e))?,
-            ref_start_pos: fields[5]
-                .parse()
-                .map_err(|e| format!("Parse RefStartPos: {}", e))?,
-            ref_end_pos: fields[6]
-                .parse()
-                .map_err(|e| format!("Parse RefEndPos: {}", e))?,
-            is_forward: fields[7].chars().next().map_or(true, |c| c != '-'),
-            confidence: fields[8]
-                .parse()
-                .map_err(|e| format!("Parse Confidence: {}", e))?,
-        });
+            .map_err(|e| format!("Parse QryContigID: {}", e))?;
+        qry_ids.push(qry);
     }
 
-    records.shrink_to_fit();
-    let records_arc = Arc::new(records);
-    let chr_lengths_arc = Arc::new(chromosome_lengths);
-
-    cache.parsed_files.insert(hash, Arc::clone(&records_arc));
-    cache.chromosome_lengths.insert(hash, Arc::clone(&chr_lengths_arc));
-    Ok((records_arc, chr_lengths_arc))
+    qry_ids.shrink_to_fit();
+    let arc = Arc::new(qry_ids);
+    cache.parsed_files.insert(hash, Arc::clone(&arc));
+    Ok(arc)
 }
 
-/// Parse from an in-memory string. Does not touch the cache.
-pub fn parse_xmap_string(content: &str) -> Result<(Arc<RecordVec>, Arc<RefLenMap>), String> {
-    let mut records: RecordVec = Vec::new();
-    let mut chromosome_lengths: RefLenMap = FxHashMap::default();
-
-    for line in content.lines() {
-        if line.starts_with('#') || line.trim().is_empty() {
-            continue;
-        }
-        let fields: Vec<&str> = line.split('\t').collect();
-        if fields.len() < 12 {
-            continue;
-        }
-
-        let ref_contig_id: u32 = fields[2].parse().map_err(|e| format!("Parse RefContigID: {}", e))?;
-        let ref_len: f64 = fields[11].parse().map_err(|e| format!("Parse RefLen: {}", e))?;
-        chromosome_lengths.insert(ref_contig_id, ref_len);
-
-        records.push(XmapRecord {
-            xmap_entry_id: fields[0].parse().map_err(|e| format!("Parse XmapEntryID: {}", e))?,
-            qry_contig_id: fields[1].parse().map_err(|e| format!("Parse QryContigID: {}", e))?,
-            ref_contig_id,
-            qry_start_pos: fields[3].parse().map_err(|e| format!("Parse QryStartPos: {}", e))?,
-            qry_end_pos:   fields[4].parse().map_err(|e| format!("Parse QryEndPos: {}", e))?,
-            ref_start_pos: fields[5].parse().map_err(|e| format!("Parse RefStartPos: {}", e))?,
-            ref_end_pos:   fields[6].parse().map_err(|e| format!("Parse RefEndPos: {}", e))?,
-            is_forward:    fields[7].chars().next().map_or(true, |c| c != '-'),
-            confidence:    fields[8].parse().map_err(|e| format!("Parse Confidence: {}", e))?,
-        });
+pub fn hash_file(path: &Path) -> Result<u64, std::io::Error> {
+    let file = File::open(path)?;
+    let mut reader = BufReader::new(file);
+    let mut hasher = DefaultHasher::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        let n = reader.read(&mut buffer)?;
+        if n == 0 { break; }
+        buffer[..n].hash(&mut hasher);
     }
-
-    records.shrink_to_fit();
-    Ok((Arc::new(records), Arc::new(chromosome_lengths)))
+    Ok(hasher.finish())
 }
 
-pub fn build_index(records: &[XmapRecord]) -> Arc<QryIndex> {
-    let mut index: QryIndex = FxHashMap::with_capacity_and_hasher(
-        records.len().min(1 << 20),
-        Default::default(),
-    );
+pub struct XmapCache {
+    pub parsed_files: Arc<DashMap<u64, Arc<XmapQryIds>>>,
+}
 
-    for (idx, record) in records.iter().enumerate() {
-        index.entry(record.qry_contig_id).or_default().push(idx as u32);
+impl XmapCache {
+    pub fn new() -> Self {
+        Self { parsed_files: Arc::new(DashMap::new()) }
     }
-
-    for v in index.values_mut() {
-        v.shrink_to_fit();
-    }
-    index.shrink_to_fit();
-
-    Arc::new(index)
 }
 
 pub struct XmapFileSet {
-    pub files: Box<[Arc<RecordVec>]>,
-    pub indices: Box<[Arc<QryIndex>]>,
+    pub files: Box<[Arc<XmapQryIds>]>,
     /// flat file index → genome index.
     pub file_to_genome: Box<[usize]>,
     /// genome index → refineFinal lookup (keyed by qry_contig_id).
-    pub refinefinal: Box<[Arc<std::collections::HashMap<u32, Vec<RefineFinalRecord>>>]>,
+    pub refinefinal: Box<[Arc<HashMap<u32, Vec<RefineFinalRecord>>>]>,
 }
 
 impl XmapFileSet {
     pub fn new(
-        files: Box<[Arc<RecordVec>]>,
-        indices: Box<[Arc<QryIndex>]>,
+        files: Box<[Arc<XmapQryIds>]>,
         file_to_genome: Box<[usize]>,
-        refinefinal: Box<[Arc<std::collections::HashMap<u32, Vec<RefineFinalRecord>>>]>,
+        refinefinal: Box<[Arc<HashMap<u32, Vec<RefineFinalRecord>>>]>,
     ) -> Self {
-        debug_assert_eq!(files.len(), indices.len(),
-                         "files and indices must be parallel arrays");
-        Self { files, indices, file_to_genome, refinefinal }
+        Self { files, file_to_genome, refinefinal }
     }
 
-    pub fn len(&self) -> usize {
-        self.files.len()
-    }
+    pub fn len(&self) -> usize { self.files.len() }
 }
 
-pub fn stream_matches_chunked(
-    fileset: Arc<XmapFileSet>,
-    max_records_per_chunk: usize,
-) -> channel::Receiver<RecordChunk> {
+/// Group qry rows across files, keep only those that span >1 file and exist
+/// in every genome's refineFinal, then resolve each via refineFinal and emit
+/// one `XmapMatch` per qry on the returned receiver.
+pub fn stream_matches(fileset: Arc<XmapFileSet>) -> channel::Receiver<XmapMatch> {
     let (tx, rx) = channel::unbounded();
-
     if fileset.len() < 2 {
         return rx;
     }
 
-    let mut groups: FxHashMap<u32, Vec<(usize, u32)>> = FxHashMap::default();
-
-    for (file_idx, file_records) in fileset.files.iter().enumerate() {
-        for (record_idx, record) in file_records.iter().enumerate() {
-            groups
-                .entry(record.qry_contig_id)
-                .or_default()
-                .push((file_idx, record_idx as u32));
+    let mut groups: FxHashMap<u32, Vec<usize>> = FxHashMap::default();
+    for (file_idx, file_qrys) in fileset.files.iter().enumerate() {
+        for &qry in file_qrys.iter() {
+            groups.entry(qry).or_default().push(file_idx);
         }
     }
 
     let n_genomes = fileset.refinefinal.len();
     let queue: Arc<SegQueue<u32>> = Arc::new(SegQueue::new());
-    for (&qry_id, records) in groups.iter() {
-        let first_file = records[0].0;
-        if !records.iter().any(|(fi, _)| *fi != first_file) {
+    for (&qry_id, file_indices) in groups.iter() {
+        let first_file = file_indices[0];
+        if !file_indices.iter().any(|fi| *fi != first_file) {
             continue;
         }
-
         let in_all = (0..n_genomes).all(|gi| {
-            fileset.refinefinal
-                .get(gi)
-                .map_or(false, |lut| lut.contains_key(&qry_id))
+            fileset.refinefinal.get(gi).map_or(false, |lut| lut.contains_key(&qry_id))
         });
-        if !in_all {
-            continue;
-        }
+        if !in_all { continue; }
         queue.push(qry_id);
     }
 
@@ -345,55 +222,34 @@ pub fn stream_matches_chunked(
 
             s.spawn(move |_| {
                 while let Some(qry_id) = queue.pop() {
-                    let Some(all_records) = groups.get(&qry_id) else {
+                    let Some(file_indices) = groups.get(&qry_id) else {
                         continue;
                     };
-                    let matched_indices: Vec<usize> =
-                        all_records.iter().map(|(fi, _)| *fi).collect();
 
-                    let matched_records: Vec<MatchedRecord> = all_records
+                    let records: Vec<MatchedRecord> = file_indices
                         .iter()
-                        .flat_map(|(fi, _ri)| {
+                        .flat_map(|fi| {
                             let gi = fileset.file_to_genome.get(*fi).copied().unwrap_or(0);
                             let rf_recs = &fileset.refinefinal[gi][&qry_id];
-                            rf_recs.iter().map(move |rf_rec| MatchedRecord {
+                            rf_recs.iter().map(move |rf| MatchedRecord {
                                 file_index:    *fi,
-                                ref_contig_id: rf_rec.chromosome,
-                                qry_start_pos: rf_rec.qry_start_pos,
-                                qry_end_pos:   rf_rec.qry_end_pos,
-                                ref_start_pos: rf_rec.ref_start_pos,
-                                ref_end_pos:   rf_rec.ref_end_pos,
-                                orientation:   rf_rec.orientation,
-                                confidence:    rf_rec.confidence,
-                                ref_len:       rf_rec.ref_len,
+                                ref_contig_id: rf.chromosome,
+                                qry_start_pos: rf.qry_start_pos,
+                                qry_end_pos:   rf.qry_end_pos,
+                                ref_start_pos: rf.ref_start_pos,
+                                ref_end_pos:   rf.ref_end_pos,
+                                orientation:   rf.orientation,
+                                confidence:    rf.confidence,
+                                ref_len:       rf.ref_len,
                             })
                         })
                         .collect();
 
-                    let total = matched_records.len();
-                    if total <= max_records_per_chunk {
-                        let _ = tx.send(RecordChunk {
-                            qry_contig_id: qry_id,
-                            file_indices:  matched_indices.into_boxed_slice(),
-                            records:       matched_records.into_boxed_slice(),
-                            chunk_index:   0,
-                            total_chunks:  1,
-                        });
-                    } else {
-                        let total_chunks = (total + max_records_per_chunk - 1) / max_records_per_chunk;
-
-                        for ci in 0..total_chunks {
-                            let start = ci * max_records_per_chunk;
-                            let end   = ((ci + 1) * max_records_per_chunk).min(total);
-                            let _ = tx.send(RecordChunk {
-                                qry_contig_id: qry_id,
-                                file_indices:  matched_indices[start..end].to_vec().into_boxed_slice(),
-                                records:       matched_records[start..end].to_vec().into_boxed_slice(),
-                                chunk_index:   ci,
-                                total_chunks,
-                            });
-                        }
-                    }
+                    let _ = tx.send(XmapMatch {
+                        qry_contig_id: qry_id,
+                        file_indices: file_indices.clone().into_boxed_slice(),
+                        records: records.into_boxed_slice(),
+                    });
                 }
             });
         }
@@ -402,275 +258,75 @@ pub fn stream_matches_chunked(
     rx
 }
 
-pub fn parse_xmap_disk(
-    path: &Path,
-    hash: u64,
-    cache: &XmapCache,
-) -> Result<(Arc<RecordVec>, Arc<RefLenMap>), String> {
-    let mut records: RecordVec = Vec::new();
-    let mut chromosome_lengths: RefLenMap = FxHashMap::default();
-    let file = File::open(path).map_err(|e| format!("Open file: {}", e))?;
-    let reader = BufReader::with_capacity(64 * 1024, file);
-
-    for line_result in reader.lines() {
-        let line = line_result.map_err(|e| format!("Read error: {}", e))?;
-        if line.starts_with('#') || line.trim().is_empty() {
-            continue;
-        }
-
-        let fields: Vec<&str> = line.split('\t').collect();
-        if fields.len() < 12 {
-            continue;
-        }
-
-        let ref_contig_id: u32 = fields[2]
-            .parse()
-            .map_err(|e| format!("Parse RefContigID: {}", e))?;
-        let ref_len: f64 = fields[11]
-            .parse()
-            .map_err(|e| format!("Parse RefLen: {}", e))?;
-        chromosome_lengths.insert(ref_contig_id, ref_len);
-
-        records.push(XmapRecord {
-            xmap_entry_id: fields[0]
-                .parse()
-                .map_err(|e| format!("Parse XmapEntryID: {}", e))?,
-            qry_contig_id: fields[1]
-                .parse()
-                .map_err(|e| format!("Parse QryContigID: {}", e))?,
-            ref_contig_id,
-            qry_start_pos: fields[3]
-                .parse()
-                .map_err(|e| format!("Parse QryStartPos: {}", e))?,
-            qry_end_pos: fields[4]
-                .parse()
-                .map_err(|e| format!("Parse QryEndPos: {}", e))?,
-            ref_start_pos: fields[5]
-                .parse()
-                .map_err(|e| format!("Parse RefStartPos: {}", e))?,
-            ref_end_pos: fields[6]
-                .parse()
-                .map_err(|e| format!("Parse RefEndPos: {}", e))?,
-            is_forward: fields[7].chars().next().map_or(true, |c| c != '-'),
-            confidence: fields[8]
-                .parse()
-                .map_err(|e| format!("Parse Confidence: {}", e))?,
-        });
-    }
-
-    records.shrink_to_fit();
-    let records_arc = Arc::new(records);
-    let chr_lengths_arc = Arc::new(chromosome_lengths);
-    cache.parsed_files.insert(hash, Arc::clone(&records_arc));
-    cache.chromosome_lengths.insert(hash, Arc::clone(&chr_lengths_arc));
-
-    Ok((records_arc, chr_lengths_arc))
-}
-
-pub fn hash_file(path: &Path) -> Result<u64, std::io::Error> {
-    let file = File::open(path)?;
-    let mut reader = BufReader::new(file);
-    let mut hasher = DefaultHasher::new();
-    let mut buffer = [0u8; 8192];
-    loop {
-        let n = reader.read(&mut buffer)?;
-        if n == 0 { break; }
-        buffer[..n].hash(&mut hasher);
-    }
-
-    Ok(hasher.finish())
-}
-
-pub fn hash_content(content: &str) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    content.hash(&mut hasher);
-    hasher.finish()
-}
-
-pub fn hash_bytes(bytes: &Bytes) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    bytes.hash(&mut hasher);
-    hasher.finish()
-}
-
-pub struct XmapCache {
-    pub parsed_files:       Arc<DashMap<u64, Arc<RecordVec>>>,
-    pub chromosome_lengths: Arc<DashMap<u64, Arc<RefLenMap>>>,
-    pub indices:            Arc<DashMap<u64, Arc<QryIndex>>>,
-}
-
-impl XmapCache {
-    pub fn new() -> Self {
-        Self {
-            parsed_files:       Arc::new(DashMap::new()),
-            chromosome_lengths: Arc::new(DashMap::new()),
-            indices:            Arc::new(DashMap::new()),
-        }
-    }
-
-    pub fn get_or_build_index(
-        &self,
-        hash: u64,
-        records: &[XmapRecord],
-    ) -> Arc<QryIndex> {
-        if let Some(cached) = self.indices.get(&hash) {
-            return Arc::clone(cached.value());
-        }
-
-        let index = build_index(records);
-        self.indices.insert(hash, Arc::clone(&index));
-        index
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
-    fn sample_xmap_content() -> &'static str {
-        r#"# hostname=imuno5p-compute
-#h XmapEntryID	QryContigID	RefContigID	QryStartPos	QryEndPos	RefStartPos	RefEndPos	Orientation	Confidence	HitEnum	QryLen	RefLen
-1	4881976	1	103833.0	2059.6	4561.0	111073.0	-	15.11	1M1D4M1D1M1D9M	103833.0	117599.0
-2	1269991	1	107882.8	229.3	4561.0	117599.0	-	16.87	1M1D6M1D7M1I3M	107882.8	117599.0
-3	4881976	2	10214.4	118509.6	4561.0	117599.0	+	17.81	1M1D6M1D10M	118509.6	117599.0"#
+    fn write_temp(content: &str) -> tempfile::NamedTempFile {
+        let mut t = tempfile::NamedTempFile::new().unwrap();
+        t.write_all(content.as_bytes()).unwrap();
+        t.flush().unwrap();
+        t
+    }
+
+    fn sample_xmap() -> &'static str {
+        "# hostname=test\n\
+#h XmapEntryID\tQryContigID\tRefContigID\tQryStartPos\tQryEndPos\tRefStartPos\tRefEndPos\tOrientation\tConfidence\tHitEnum\tQryLen\tRefLen
+1\t4881976\t1\t103833.0\t2059.6\t4561.0\t111073.0\t-\t15.11\t1M\t103833.0\t117599.0
+2\t1269991\t1\t107882.8\t229.3\t4561.0\t117599.0\t-\t16.87\t1M\t107882.8\t117599.0
+3\t4881976\t2\t10214.4\t118509.6\t4561.0\t117599.0\t+\t17.81\t1M\t118509.6\t117599.0"
     }
 
     #[test]
-    fn test_parse_xmap_string() {
-        let (records, chr_lengths) = parse_xmap_string(sample_xmap_content()).unwrap();
-        assert_eq!(records.len(), 3);
-        assert_eq!(chr_lengths.len(), 2);
-
-        let rec0 = &records[0];
-        assert_eq!(rec0.xmap_entry_id, 1);
-        assert_eq!(rec0.qry_contig_id, 4881976);
-        assert_eq!(rec0.ref_contig_id, 1);
-        assert_eq!(rec0.is_forward, false);
-        assert_eq!(rec0.confidence, 15.11);
-        assert_eq!(chr_lengths.get(&1).copied(), Some(117599.0));
-    }
-
-    #[test]
-    fn test_parse_xmap_streaming() {
-        let content = sample_xmap_content();
-        let bytes = Bytes::from(content.to_string());
+    fn parses_xmap_qry_ids() {
+        let temp = write_temp(sample_xmap());
         let cache = XmapCache::new();
-        let hash = hash_bytes(&bytes);
-
-        let (records, chr_lengths) = parse_xmap_streaming(&bytes, hash, &cache).unwrap();
-        assert_eq!(records.len(), 3);
-        assert_eq!(chr_lengths.len(), 2);
-
-        let rec0 = &records[0];
-        assert_eq!(rec0.xmap_entry_id, 1);
-        assert_eq!(rec0.qry_contig_id, 4881976);
-        assert_eq!(rec0.ref_contig_id, 1);
-        assert_eq!(rec0.is_forward, false);
-        assert_eq!(rec0.confidence, 15.11);
-        assert_eq!(chr_lengths.get(&1).copied(), Some(117599.0));
+        let qrys = parse_xmap_disk(temp.path(), 1, &cache).unwrap();
+        assert_eq!(&*qrys, &[4881976u32, 1269991, 4881976]);
     }
 
     #[test]
-    fn test_build_index() {
-        let (records, _) = parse_xmap_string(sample_xmap_content()).unwrap();
-        let index = build_index(&records);
-        assert_eq!(index.len(), 2);
-
-        let indices_for_sequence = index.get(&4881976).unwrap();
-        assert_eq!(indices_for_sequence.len(), 2);
+    fn hash_file_is_stable() {
+        let temp = write_temp("test content");
+        assert_eq!(hash_file(temp.path()).unwrap(), hash_file(temp.path()).unwrap());
     }
 
     #[test]
-    fn test_stream_matches_chunked() {
-        let file1_content = r#"#h XmapEntryID	QryContigID	RefContigID	QryStartPos	QryEndPos	RefStartPos	RefEndPos	Orientation	Confidence	HitEnum	QryLen	RefLen
-1	100	1	1000.0	2000.0	5000.0	6000.0	+	15.0	1M	2000.0	250000.0
-2	200	2	3000.0	4000.0	7000.0	8000.0	-	14.5	1M	4000.0	250000.0"#;
+    fn streams_matches_across_files() {
+        let f1 = write_temp("#h XmapEntryID\tQryContigID\tRefContigID\tQryStartPos\tQryEndPos\tRefStartPos\tRefEndPos\tOrientation\tConfidence\tHitEnum\tQryLen\tRefLen
+1\t100\t1\t1000.0\t2000.0\t5000.0\t6000.0\t+\t15.0\t1M\t2000.0\t250000.0
+2\t200\t2\t3000.0\t4000.0\t7000.0\t8000.0\t-\t14.5\t1M\t4000.0\t250000.0");
+        let f2 = write_temp("#h XmapEntryID\tQryContigID\tRefContigID\tQryStartPos\tQryEndPos\tRefStartPos\tRefEndPos\tOrientation\tConfidence\tHitEnum\tQryLen\tRefLen
+10\t100\t3\t1500.0\t2500.0\t9000.0\t10000.0\t+\t16.0\t1M\t2500.0\t250000.0
+11\t200\t4\t3500.0\t4500.0\t11000.0\t12000.0\t-\t15.5\t1M\t4500.0\t250000.0");
 
-        let file2_content = r#"#h XmapEntryID	QryContigID	RefContigID	QryStartPos	QryEndPos	RefStartPos	RefEndPos	Orientation	Confidence	HitEnum	QryLen	RefLen
-10	100	3	1500.0	2500.0	9000.0	10000.0	+	16.0	1M	2500.0	250000.0
-11	200	4	3500.0	4500.0	11000.0	12000.0	-	15.5	1M	4500.0	250000.0"#;
+        let cache = XmapCache::new();
+        let q1 = parse_xmap_disk(f1.path(), 1, &cache).unwrap();
+        let q2 = parse_xmap_disk(f2.path(), 2, &cache).unwrap();
 
-        let (file1_records, _) = parse_xmap_string(file1_content).unwrap();
-        let (file2_records, _) = parse_xmap_string(file2_content).unwrap();
-        let idx1 = build_index(&file1_records);
-        let idx2 = build_index(&file2_records);
-
-        let mut rf_lookup: std::collections::HashMap<u32, Vec<RefineFinalRecord>> = std::collections::HashMap::new();
-        rf_lookup.insert(100, vec![RefineFinalRecord {
-            chromosome: 1,
-            qry_start_pos: 0.0,
-            qry_end_pos: 0.0,
-            ref_start_pos: 0.0,
-            ref_end_pos: 0.0,
-            orientation: '+',
-            confidence: 15.0,
-            ref_len: 250000.0,
-        }]);
-        rf_lookup.insert(200, vec![RefineFinalRecord {
-            chromosome: 2,
-            qry_start_pos: 0.0,
-            qry_end_pos: 0.0,
-            ref_start_pos: 0.0,
-            ref_end_pos: 0.0,
-            orientation: '-',
-            confidence: 14.5,
-            ref_len: 250000.0,
-        }]);
-        let rf_arc = Arc::new(rf_lookup);
+        let mut rf: HashMap<u32, Vec<RefineFinalRecord>> = HashMap::new();
+        for &qry in &[100u32, 200] {
+            rf.insert(qry, vec![RefineFinalRecord {
+                chromosome: 1, qry_start_pos: 0.0, qry_end_pos: 0.0,
+                ref_start_pos: 0.0, ref_end_pos: 0.0, orientation: '+',
+                confidence: 15.0, ref_len: 250000.0,
+            }]);
+        }
+        let rf_arc = Arc::new(rf);
 
         let fileset = Arc::new(XmapFileSet::new(
-            vec![file1_records, file2_records].into_boxed_slice(),
-            vec![idx1, idx2].into_boxed_slice(),
+            vec![q1, q2].into_boxed_slice(),
             vec![0usize, 1usize].into_boxed_slice(),
             vec![Arc::clone(&rf_arc), Arc::clone(&rf_arc)].into_boxed_slice(),
         ));
 
-        let rx = stream_matches_chunked(fileset, 50);
-        let mut chunk_count = 0;
-        while let Ok(chunk) = rx.recv() {
-            chunk_count += 1;
-            assert!(chunk.qry_contig_id == 100 || chunk.qry_contig_id == 200);
-            assert_eq!(chunk.total_chunks, 1);
+        let rx = stream_matches(fileset);
+        let mut count = 0;
+        while let Ok(m) = rx.recv() {
+            count += 1;
+            assert!(m.qry_contig_id == 100 || m.qry_contig_id == 200);
         }
-        assert_eq!(chunk_count, 2);
-    }
-}
-
-#[cfg(test)]
-mod tests_disk {
-    use super::*;
-    use std::io::Write;
-
-    #[test]
-    fn test_parse_xmap_disk() {
-        let mut temp = tempfile::NamedTempFile::new().unwrap();
-        let content = r#"# hostname=test
-#h XmapEntryID	QryContigID	RefContigID	QryStartPos	QryEndPos	RefStartPos	RefEndPos	Orientation	Confidence	HitEnum	QryLen	RefLen
-1	4881976	1	103833.0	2059.6	4561.0	111073.0	-	15.11	1M1D4M1D1M1D9M	103833.0	117599.0
-2	1269991	1	107882.8	229.3	4561.0	117599.0	-	16.87	1M1D6M1D7M1I3M	107882.8	117599.0"#;
-        temp.write_all(content.as_bytes()).unwrap();
-        temp.flush().unwrap();
-
-        let cache = XmapCache::new();
-        let hash = 12345u64;
-        let (records, chr_lengths) = parse_xmap_disk(temp.path(), hash, &cache).unwrap();
-        assert_eq!(records.len(), 2);
-        assert_eq!(chr_lengths.len(), 1);
-
-        let rec0 = &records[0];
-        assert_eq!(rec0.xmap_entry_id, 1);
-        assert_eq!(rec0.qry_contig_id, 4881976);
-        assert_eq!(rec0.ref_contig_id, 1);
-    }
-
-    #[test]
-    fn test_hash_file() {
-        let mut temp = tempfile::NamedTempFile::new().unwrap();
-        temp.write_all(b"test content").unwrap();
-        temp.flush().unwrap();
-
-        let hash1 = hash_file(temp.path()).unwrap();
-        let hash2 = hash_file(temp.path()).unwrap();
-        assert_eq!(hash1, hash2);
+        assert_eq!(count, 2);
     }
 }

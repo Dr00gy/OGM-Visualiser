@@ -1,34 +1,25 @@
 <script lang="ts">
-  import { onMount, afterUpdate, onDestroy, tick } from 'svelte';
+  import { onMount, afterUpdate, onDestroy } from 'svelte';
   import * as d3 from 'd3';
-  import type { BackendMatch, ChromosomeInfo } from '$lib/bincodeDecoder';
+  import type { ChromosomeInfo } from '$lib/bincodeDecoder';
   import type { FileData } from '$lib/types';
   import { donutFltState } from '$lib/filterStateStore';
   import {
     fetchMeta,
     fetchFlows,
     makeDebouncer,
-    type MetaResponse,
     type WireFlow,
   } from '$lib/queryClient';
   import DonutInfo from './DonutInfo.svelte';
 
   export let files: FileData[] = [];
   export let fileToGen: number[] = [];
-
-  export let matches: BackendMatch[] = [];
   export let chrInfo: ChromosomeInfo[][] = [];
   export let showDups = false;
-
   export let scale = 1.1;
-
   export let isStreaming = false;
   export let sessId: string | null = null;
   export let isQueryable: boolean = false;
-
-  function gi(fileIdx: number): number {
-    return fileToGen[fileIdx] ?? 0;
-  }
 
   let svgEl: SVGSVGElement;
   let containerEl: HTMLDivElement;
@@ -45,46 +36,22 @@
   let selGenForChr = $donutFltState.selGenForChr;
 
   $: donutFltState.set({
-    selSeqId,
-    selGen1,
-    selGen2,
-    selChr,
-    selGenForChr,
-    showDups,
-    scale
+    selSeqId, selGen1, selGen2, selChr, selGenForChr, showDups, scale,
   });
 
   $: genSizes = (() => {
     const sizes = new Map<number, number>();
-
-    if (chrInfo.length > 0) {
-      chrInfo.forEach((chroms, genIdx) => {
-        const seen = new Map<number, number>();
-        for (const c of chroms) {
-          if (!seen.has(c.ref_contig_id)) seen.set(c.ref_contig_id, c.ref_len);
-        }
-        const total = Array.from(seen.values()).reduce((s, v) => s + v, 0);
-        sizes.set(genIdx, total);
-      });
-    } else {
-      const byGen = new Map<number, Map<number, number>>();
-      for (const m of matches) {
-        for (const r of m.records) {
-          const genIdx = gi(r.file_index);
-          if (!byGen.has(genIdx)) byGen.set(genIdx, new Map());
-          const mg = byGen.get(genIdx)!;
-          if (!mg.has(r.ref_contig_id)) mg.set(r.ref_contig_id, r.ref_len);
-        }
+    chrInfo.forEach((chroms, genIdx) => {
+      const seen = new Map<number, number>();
+      for (const c of chroms) {
+        if (!seen.has(c.ref_contig_id)) seen.set(c.ref_contig_id, c.ref_len);
       }
-      for (const [genIdx, chrMap] of byGen.entries()) {
-        sizes.set(genIdx, Array.from(chrMap.values()).reduce((s, v) => s + v, 0));
-      }
-    }
-
+      const total = Array.from(seen.values()).reduce((s, v) => s + v, 0);
+      sizes.set(genIdx, total);
+    });
     files.forEach((_, idx) => {
       if (!sizes.has(idx) || sizes.get(idx) === 0) sizes.set(idx, 100000);
     });
-
     return sizes;
   })();
 
@@ -100,7 +67,7 @@
     metaFor = sessId;
     try {
       const meta = await fetchMeta(sessId);
-      if (!meta) return; // aborted
+      if (!meta) return;
       maxConf = meta.max_confidence > 0 ? meta.max_confidence : 1.0;
       availSeqIds = meta.available_sequence_ids;
     } catch (err) {
@@ -117,7 +84,6 @@
     metaFor = null;
   }
 
-
   $: availGens = files.map((f, i) => ({ value: i.toString(), label: f.name, color: f.color }));
   $: availChrs = Array.from({ length: 24 }, (_, i) => (i + 1).toString());
 
@@ -132,38 +98,26 @@
 
   $: segments = (() => {
     if (totGenSize === 0) return [];
-
     let offset = 0;
-    const segs = files.map((file, idx) => {
+    return files.map((file, idx) => {
       const genSize = genSizes.get(idx) || 1;
       const pct = genSize / totGenSize;
       const length = pct * circumference;
-
       const startAng = (offset / circumference) * 360 - 90;
       const endAng = ((offset + length) / circumference) * 360 - 90;
       const angRange = endAng - startAng;
-
       const dashArray = `${length} ${circumference}`;
       const dashOffset = -offset;
-
       offset += length;
-
       return {
-        ...file,
-        idx,
-        genSize,
+        ...file, idx, genSize,
         pct: (pct * 100).toFixed(1),
         showLabel: pct >= 0.01,
         showChrs: pct >= 0.20,
-        startAng,
-        endAng,
-        angRange,
-        dashArray,
-        dashOffset
+        startAng, endAng, angRange,
+        dashArray, dashOffset,
       };
     });
-
-    return segs;
   })();
 
   $: parsedFlts = {
@@ -210,21 +164,13 @@
 
   const FLOW_RENDER_LIMIT = 5000;
   $: anyFltActive =
-    selSeqId !== '' ||
-    selGen1 !== '' ||
-    selGen2 !== '' ||
-    selChr !== '';
+    selSeqId !== '' || selGen1 !== '' || selGen2 !== '' || selChr !== '';
 
   async function reloadFlows() {
-    if (!sessId) {
+    if (!sessId || !isQueryable) {
       flowPaths = [];
       return;
     }
-    if (!isQueryable) {
-      flowPaths = [];
-      return;
-    }
-
 
     if (!anyFltActive) {
       if (flowsAbort) {
@@ -236,14 +182,11 @@
       return;
     }
 
-    if (flowsAbort) {
-      flowsAbort.abort();
-    }
+    if (flowsAbort) flowsAbort.abort();
     flowsAbort = new AbortController();
     const signal = flowsAbort.signal;
 
-    const LDG_CHIP_DELAY_MS = 200;
-    const chipTimer = setTimeout(() => { flowsLdg = true; }, LDG_CHIP_DELAY_MS);
+    const chipTimer = setTimeout(() => { flowsLdg = true; }, 200);
 
     try {
       const p = parsedFlts;
@@ -269,28 +212,17 @@
   }
 
   $: if (isQueryable && sessId) {
-    selSeqId;
-    selGen1;
-    selGen2;
-    selChr;
-    selGenForChr;
-    showDups;
+    selSeqId; selGen1; selGen2; selChr; selGenForChr; showDups;
     flowsDeb.schedule(() => reloadFlows());
   }
 
-
-  $: fltFlowPaths = flowPaths;
   $: if (isInit && mainGroup) {
-    fltFlowPaths;
+    flowPaths;
     updateChart();
   }
 
   function clearAllFlts() {
-    selSeqId = '';
-    selGen1 = '';
-    selGen2 = '';
-    selChr = '';
-    selGenForChr = '';
+    selSeqId = ''; selGen1 = ''; selGen2 = ''; selChr = ''; selGenForChr = '';
   }
 
   $: showChrLabels = scale >= 1.1;
@@ -298,13 +230,8 @@
     if (!files.length) return [];
 
     const nodes: Array<{
-      id: string;
-      fileIdx: number;
-      chr: number;
-      angle: number;
-      x: number;
-      y: number;
-      color: string;
+      id: string; fileIdx: number; chr: number;
+      angle: number; x: number; y: number; color: string;
     }> = [];
 
     for (let fileIdx = 0; fileIdx < files.length; fileIdx++) {
@@ -321,11 +248,10 @@
         const y = cy + (radius - sw) * Math.sin(rad);
         nodes.push({
           id: `chr_${fileIdx}_${i}`,
-          fileIdx,
-          chr: i,
+          fileIdx, chr: i,
           angle: chrMidDeg,
           x, y,
-          color: files[fileIdx].color
+          color: files[fileIdx].color,
         });
       }
     }
@@ -338,7 +264,6 @@
   let ticksLayer: d3.Selection<SVGGElement, unknown, null, undefined>;
   let labelsLayer: d3.Selection<SVGGElement, unknown, null, undefined>;
 
-
   function initChart() {
     if (!svgEl || !files.length) return;
 
@@ -350,7 +275,6 @@
       .attr('height', 400)
       .attr('viewBox', '0 0 400 400')
       .attr('preserveAspectRatio', 'xMidYMid meet');
-
 
     mainGroup = svg.append('g').attr('class', 'main-group');
     flowsLayer = mainGroup.append('g').attr('class', 'flow-lines');
@@ -401,28 +325,16 @@
           .attr('fill', 'transparent')
           .attr('stroke', (d: any) => d.color)
           .attr('stroke-width', sw)
-          .attr('stroke-dasharray', (d: any) => {
-            const length = (d.angRange / 360) * circumference;
-            return `${length} ${circumference}`;
-          })
-          .attr('stroke-dashoffset', (d: any) => {
-            const offset = cumOffsets.get(d.idx) || 0;
-            return -offset;
-          })
+          .attr('stroke-dasharray', (d: any) => `${(d.angRange / 360) * circumference} ${circumference}`)
+          .attr('stroke-dashoffset', (d: any) => -(cumOffsets.get(d.idx) || 0))
           .attr('transform', `rotate(-90 ${cx} ${cy})`),
         update => update
           .attr('r', circleR)
           .attr('stroke-width', sw)
           .attr('stroke', (d: any) => d.color)
-          .attr('stroke-dasharray', (d: any) => {
-            const length = (d.angRange / 360) * circumference;
-            return `${length} ${circumference}`;
-          })
-          .attr('stroke-dashoffset', (d: any) => {
-            const offset = cumOffsets.get(d.idx) || 0;
-            return -offset;
-          }),
-        exit => exit.remove()
+          .attr('stroke-dasharray', (d: any) => `${(d.angRange / 360) * circumference} ${circumference}`)
+          .attr('stroke-dashoffset', (d: any) => -(cumOffsets.get(d.idx) || 0)),
+        exit => exit.remove(),
       );
 
     const ticks: Array<{ x1: number; y1: number; x2: number; y2: number; key: string }> = [];
@@ -448,23 +360,19 @@
         enter => enter
           .append('line')
           .attr('class', 'tick')
-          .attr('x1', d => d.x1)
-          .attr('y1', d => d.y1)
-          .attr('x2', d => d.x2)
-          .attr('y2', d => d.y2)
+          .attr('x1', d => d.x1).attr('y1', d => d.y1)
+          .attr('x2', d => d.x2).attr('y2', d => d.y2)
           .attr('stroke', 'var(--text-primary)')
           .attr('stroke-width', 1 * scale)
           .attr('opacity', 0.7),
         update => update
-          .attr('x1', d => d.x1)
-          .attr('y1', d => d.y1)
-          .attr('x2', d => d.x2)
-          .attr('y2', d => d.y2)
+          .attr('x1', d => d.x1).attr('y1', d => d.y1)
+          .attr('x2', d => d.x2).attr('y2', d => d.y2)
           .attr('stroke-width', 1 * scale),
-        exit => exit.remove()
+        exit => exit.remove(),
       );
 
-    const flowsToRender = isStreaming ? fltFlowPaths.slice(0, 500) : fltFlowPaths;
+    const flowsToRender = isStreaming ? flowPaths.slice(0, 500) : flowPaths;
 
     const flowLines = flowsToRender.map(flow => {
       const fromNode = chrNodes.find(n => n.fileIdx === flow.fromFileIdx && n.chr === flow.fromChr);
@@ -479,25 +387,17 @@
         enter => enter
           .append('path')
           .attr('class', 'flow')
-          .attr('d', (d: any) => {
-            const x1 = d.fromNode.x, y1 = d.fromNode.y;
-            const x2 = d.toNode.x, y2 = d.toNode.y;
-            return `M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`;
-          })
+          .attr('d', (d: any) => `M ${d.fromNode.x} ${d.fromNode.y} Q ${cx} ${cy} ${d.toNode.x} ${d.toNode.y}`)
           .attr('stroke', (d: any) => d.color)
           .attr('stroke-width', (d: any) => d.width)
           .attr('fill', 'none')
           .attr('opacity', (d: any) => d.opacity)
           .attr('stroke-linecap', 'round'),
         update => update
-          .attr('d', (d: any) => {
-            const x1 = d.fromNode.x, y1 = d.fromNode.y;
-            const x2 = d.toNode.x, y2 = d.toNode.y;
-            return `M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`;
-          })
+          .attr('d', (d: any) => `M ${d.fromNode.x} ${d.fromNode.y} Q ${cx} ${cy} ${d.toNode.x} ${d.toNode.y}`)
           .attr('stroke-width', (d: any) => d.width)
           .attr('opacity', (d: any) => d.opacity),
-        exit => exit.remove()
+        exit => exit.remove(),
       );
 
     const chromLabels = labelsLayer
@@ -521,7 +421,7 @@
         .attr('x', d => cx + (radius + 10 * scale) * Math.cos((d.angle * Math.PI) / 180))
         .attr('y', d => cy + (radius + 10 * scale) * Math.sin((d.angle * Math.PI) / 180))
         .attr('font-size', 7 * scale),
-      exit => exit.remove()
+      exit => exit.remove(),
     );
 
     const centerDot = mainGroup.selectAll('circle.center').data([1]);
@@ -529,14 +429,10 @@
       enter => enter
         .append('circle')
         .attr('class', 'center')
-        .attr('cx', cx)
-        .attr('cy', cy)
-        .attr('r', 2)
+        .attr('cx', cx).attr('cy', cy).attr('r', 2)
         .attr('fill', 'var(--text-secondary)'),
-      update => update
-        .attr('cx', cx)
-        .attr('cy', cy),
-      exit => exit.remove()
+      update => update.attr('cx', cx).attr('cy', cy),
+      exit => exit.remove(),
     );
   }
 
@@ -544,24 +440,16 @@
     if (!svgEl) return;
     const svg = d3.select(svgEl);
     svg.call(d3.zoom().transform as any, d3.zoomIdentity);
-    curZoom = 1;
-    curTX = 0;
-    curTY = 0;
-    if (mainGroup) {
-      mainGroup.attr('transform', `translate(0,0) scale(1)`);
-    }
+    curZoom = 1; curTX = 0; curTY = 0;
+    if (mainGroup) mainGroup.attr('transform', `translate(0,0) scale(1)`);
   }
 
   afterUpdate(() => {
-    if (!isInit && chrInfo.length > 0 && files.length > 0) {
-      initChart();
-    }
+    if (!isInit && chrInfo.length > 0 && files.length > 0) initChart();
   });
 
   onMount(() => {
-    if (chrInfo.length > 0 && files.length > 0) {
-      initChart();
-    }
+    if (chrInfo.length > 0 && files.length > 0) initChart();
   });
 
   onDestroy(() => {
@@ -579,7 +467,7 @@
       <div class="stats">
         <span>{files.length} genomes</span>
         <span>Total genome size: {totGenSize.toLocaleString()} bp</span>
-        <span>Flow lines: {fltFlowPaths.length.toLocaleString()}{flowsLdg ? ' (loading...)' : ''} {showDups ? '(self-flow)' : '(cross-genome)'}</span>
+        <span>Flow lines: {flowPaths.length.toLocaleString()}{flowsLdg ? ' (loading...)' : ''} {showDups ? '(self-flow)' : '(cross-genome)'}</span>
         <span class="confidence-stat">Max confidence: {maxConf.toFixed(2)}</span>
       </div>
     </div>
@@ -634,7 +522,7 @@
     {segments}
     {genSizes}
     {totGenSize}
-    {fltFlowPaths}
+    fltFlowPaths={flowPaths}
     {showDups}
     {sessId}
     {isQueryable}

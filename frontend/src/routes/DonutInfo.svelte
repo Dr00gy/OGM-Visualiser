@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import type { FileData, DonutSeg, MatchedRecord } from '$lib/types';
+  import type { FileData, DonutSeg } from '$lib/types';
   import { searchStore } from '$lib/searchStore';
   import SeqPicker from './SeqPicker.svelte';
   import {
@@ -31,9 +31,7 @@
   export let availChrs: string[] = [];
   export let clearAllFlts: () => void = () => {};
 
-
   export let sessId: string | null = null;
-
   export let isQueryable: boolean = false;
 
   let ovQry = '';
@@ -48,18 +46,10 @@
     mtcType = state.mtcType;
   });
 
-  $: if (ovQry !== $searchStore.ovQry) {
-    searchStore.update(state => ({ ...state, ovQry }));
-  }
-  $: if (mtcQry !== $searchStore.mtcQry) {
-    searchStore.update(state => ({ ...state, mtcQry }));
-  }
-  $: if (ovType !== $searchStore.ovType) {
-    searchStore.update(state => ({ ...state, ovType }));
-  }
-  $: if (mtcType !== $searchStore.mtcType) {
-    searchStore.update(state => ({ ...state, mtcType }));
-  }
+  $: searchStore.update(s => (
+    s.ovQry === ovQry && s.mtcQry === mtcQry && s.ovType === ovType && s.mtcType === mtcType
+      ? s : { ...s, ovQry, mtcQry, ovType, mtcType }
+  ));
 
   let editOvPage = false;
   let editMtcPage = false;
@@ -75,71 +65,33 @@
   $: ovQry, ovType, ovPage = 1;
   $: mtcQry, mtcType, mtcPage = 1;
 
-  type OvStat = {
-    totOcc: number;
-    genOcc: Map<number, number>;
-    chrOcc: Map<string, number>;
-    maxConf: number;
-  };
-  type OvItem = [number, OvStat];
-
-  let ovItems: OvItem[] = [];
+  let ovItems: SequenceAggregate[] = [];
   let ovTotal = 0;
   $: totOvPages = Math.max(1, Math.ceil(ovTotal / OV_PER_PAGE));
   let ovLoading = false;
   let ovAbort: AbortController | null = null;
   const ovDeb = makeDebouncer(400);
 
-
-  function aggToOvItem(agg: SequenceAggregate): OvItem {
-    const genMap = new Map<number, number>();
-
-    for (let gi = 0; gi < agg.per_genome.length; gi++) {
-      const v = agg.per_genome[gi];
-      if (v > 0) genMap.set(gi, v);
-    }
-
-    const chrMap = new Map<string, number>();
-    for (const c of agg.per_chromosome) {
-      chrMap.set(`${c.genome_index}-${c.chromosome}`, c.count);
-    }
-
-    const stat: OvStat = {
-      totOcc: agg.total_occurrences,
-      genOcc: genMap,
-      chrOcc: chrMap,
-      maxConf: agg.max_confidence,
-    };
-    return [agg.qry_contig_id, stat];
-  }
-
   async function reloadOv() {
     if (!sessId || !isQueryable) {
-      ovItems = [];
-      ovTotal = 0;
+      ovItems = []; ovTotal = 0;
       return;
     }
     if (ovAbort) ovAbort.abort();
     ovAbort = new AbortController();
     const signal = ovAbort.signal;
-
     const chipTimer = setTimeout(() => { ovLoading = true; }, 200);
 
     try {
       const page = await fetchSeqs(sessId, {
-        q: ovQry,
-        searchType: ovType,
-        page: ovPage,
-        perPage: OV_PER_PAGE,
-        signal,
+        q: ovQry, searchType: ovType, page: ovPage, perPage: OV_PER_PAGE, signal,
       });
-      if (!page) return; // aborted
+      if (!page) return;
       ovTotal = page.total;
-      ovItems = page.items.map(aggToOvItem);
+      ovItems = page.items;
     } catch (err) {
       console.error('Failed to fetch /sequences:', err);
-      ovItems = [];
-      ovTotal = 0;
+      ovItems = []; ovTotal = 0;
     } finally {
       clearTimeout(chipTimer);
       ovLoading = false;
@@ -155,70 +107,42 @@
   }
 
   $: if (sessId && isQueryable) {
-    ovQry;
-    ovType;
-    ovPage;
+    ovQry; ovType; ovPage;
     if (!ovFirstLoaded) {
       ovFirstLoaded = true;
-      (async () => {
-        await reloadOv();
-        mtcHoldoff = false;
-      })();
+      (async () => { await reloadOv(); mtcHoldoff = false; })();
     } else {
       ovDeb.schedule(() => reloadOv());
     }
   }
 
-  type MtcItem = {
-    qry_contig_id: number;
-    records: MatchedRecord[];
-    total_record_count: number;
-    records_truncated: boolean;
-  };
-
-  let mtcItems: MtcItem[] = [];
+  let mtcItems: MatchEntry[] = [];
   let mtcTotal = 0;
   $: totMtcPages = Math.max(1, Math.ceil(mtcTotal / MTC_PER_PAGE));
   let mtcLoading = false;
   let mtcAbort: AbortController | null = null;
   const mtcDeb = makeDebouncer(400);
 
-  function mtcEntryToItem(entry: MatchEntry): MtcItem {
-    return {
-      qry_contig_id: entry.qry_contig_id,
-      records: entry.records as unknown as MatchedRecord[],
-      total_record_count: entry.total_record_count,
-      records_truncated: entry.records_truncated,
-    };
-  }
-
   async function reloadMtc() {
     if (!sessId || !isQueryable) {
-      mtcItems = [];
-      mtcTotal = 0;
+      mtcItems = []; mtcTotal = 0;
       return;
     }
     if (mtcAbort) mtcAbort.abort();
     mtcAbort = new AbortController();
     const signal = mtcAbort.signal;
-
     const chipTimer = setTimeout(() => { mtcLoading = true; }, 200);
 
     try {
       const page = await fetchMatchesPage(sessId, {
-        q: mtcQry,
-        searchType: mtcType,
-        page: mtcPage,
-        perPage: MTC_PER_PAGE,
-        signal,
+        q: mtcQry, searchType: mtcType, page: mtcPage, perPage: MTC_PER_PAGE, signal,
       });
       if (!page) return;
       mtcTotal = page.total;
-      mtcItems = page.items.map(mtcEntryToItem);
+      mtcItems = page.items;
     } catch (err) {
       console.error('Failed to fetch /matches:', err);
-      mtcItems = [];
-      mtcTotal = 0;
+      mtcItems = []; mtcTotal = 0;
     } finally {
       clearTimeout(chipTimer);
       mtcLoading = false;
@@ -226,27 +150,15 @@
   }
 
   $: if (sessId && isQueryable && !mtcHoldoff) {
-    mtcQry;
-    mtcType;
-    mtcPage;
+    mtcQry; mtcType; mtcPage;
     mtcDeb.schedule(() => reloadMtc());
   }
 
-  function goToOvPage(page: number) {
-    ovPage = Math.max(1, Math.min(page, totOvPages));
-  }
-  function goToMtcPage(page: number) {
-    mtcPage = Math.max(1, Math.min(page, totMtcPages));
-  }
+  function goToOvPage(page: number) { ovPage = Math.max(1, Math.min(page, totOvPages)); }
+  function goToMtcPage(page: number) { mtcPage = Math.max(1, Math.min(page, totMtcPages)); }
 
-  function startEditOvPage() {
-    editOvPage = true;
-    ovPageInput = ovPage.toString();
-  }
-  function startEditMtcPage() {
-    editMtcPage = true;
-    mtcPageInput = mtcPage.toString();
-  }
+  function startEditOvPage() { editOvPage = true; ovPageInput = ovPage.toString(); }
+  function startEditMtcPage() { editMtcPage = true; mtcPageInput = mtcPage.toString(); }
 
   function submitOvJump() {
     const n = parseInt(ovPageInput);
@@ -268,37 +180,24 @@
     else if (e.key === 'Escape') editMtcPage = false;
   }
 
-  function setOvType(type: SearchType) {
-    ovType = type;
-    ovPage = 1;
-  }
-  function setMtcType(type: SearchType) {
-    mtcType = type;
-    mtcPage = 1;
-  }
+  function setOvType(type: SearchType) { ovType = type; ovPage = 1; }
+  function setMtcType(type: SearchType) { mtcType = type; mtcPage = 1; }
 
-  $: ovPlaceholder = (() => {
-    switch (ovType) {
-      case 'sequence': return 'Search by sequence ID (number)...';
-      case 'chromosome': return 'Search by chromosome (example, "1-2" for genome 1 chromosome 2)...';
-      case 'confidence': return 'Search by confidence value (number)...';
-      default: return 'Search...';
-    }
-  })();
+  const PLACEHOLDER_BY_TYPE: Record<SearchType, string> = {
+    sequence:   'Search by sequence ID (number)...',
+    chromosome: 'Search by chromosome (number)...',
+    confidence: 'Search by confidence value (number)...',
+  };
 
-  $: mtcPlaceholder = (() => {
-    switch (mtcType) {
-      case 'sequence': return 'Search by sequence ID (number)...';
-      case 'chromosome': return 'Search by chromosome (number)...';
-      case 'confidence': return 'Search by confidence value (number)...';
-      default: return 'Search...';
-    }
-  })();
+  $: ovPlaceholder = ovType === 'chromosome'
+    ? 'Search by chromosome (example, "1-2" for genome 1 chromosome 2)...'
+    : PLACEHOLDER_BY_TYPE[ovType];
+  $: mtcPlaceholder = PLACEHOLDER_BY_TYPE[mtcType];
 
   onDestroy(() => {
     unsub();
     if (ovAbort) ovAbort.abort();
-    if (mtcAbort)  mtcAbort.abort();
+    if (mtcAbort) mtcAbort.abort();
     ovDeb.cancel();
     mtcDeb.cancel();
   });
@@ -328,22 +227,13 @@
 
       <div class="search-container">
         <div class="search-type-toggle">
-          <button
-            class:active={ovType === 'sequence'}
-            on:click={() => setOvType('sequence')}
-          >
+          <button class:active={ovType === 'sequence'} on:click={() => setOvType('sequence')}>
             Sequence ID
           </button>
-          <button
-            class:active={ovType === 'chromosome'}
-            on:click={() => setOvType('chromosome')}
-          >
+          <button class:active={ovType === 'chromosome'} on:click={() => setOvType('chromosome')}>
             Chromosome
           </button>
-          <button
-            class:active={ovType === 'confidence'}
-            on:click={() => setOvType('confidence')}
-          >
+          <button class:active={ovType === 'confidence'} on:click={() => setOvType('confidence')}>
             Confidence
           </button>
         </div>
@@ -358,30 +248,31 @@
       </div>
 
       <div class="overview-list">
-        {#each ovItems as [qryId, stat]}
+        {#each ovItems as agg}
           <div class="overview-item">
             <div class="overview-header">
-              <strong>QryContig {qryId}</strong>
-              <span class="overview-total">{stat.totOcc} total occurrences</span>
-              <span class="overview-confidence">Max conf: {stat.maxConf.toFixed(2)}</span>
+              <strong>QryContig {agg.qry_contig_id}</strong>
+              <span class="overview-total">{agg.total_occurrences} total occurrences</span>
+              <span class="overview-confidence">Max conf: {agg.max_confidence.toFixed(2)}</span>
             </div>
 
             <div class="genome-breakdown">
               <div class="breakdown-label">Per genome:</div>
-              {#each Array.from(stat.genOcc.entries()) as [genIdx, count]}
-                <span class="genome-badge" style="background: {files[genIdx]?.color}20; color: {files[genIdx]?.color}; border-color: {files[genIdx]?.color}">
-                  {files[genIdx]?.name}: {count}x
-                </span>
+              {#each agg.per_genome as count, genIdx}
+                {#if count > 0}
+                  <span class="genome-badge" style="background: {files[genIdx]?.color}20; color: {files[genIdx]?.color}; border-color: {files[genIdx]?.color}">
+                    {files[genIdx]?.name}: {count}x
+                  </span>
+                {/if}
               {/each}
             </div>
 
             <div class="chromosome-breakdown">
               <div class="breakdown-label">Per chromosome:</div>
               <div class="chr-grid">
-                {#each Array.from(stat.chrOcc.entries()) as [chrKey, count]}
-                  {@const [genIdx, chrNum] = chrKey.split('-').map(Number)}
-                  <span class="chr-mini-badge" style="background: {files[genIdx]?.color}20; color: {files[genIdx]?.color}; border-color: {files[genIdx]?.color}">
-                    G{genIdx} Chr{chrNum}: {count}
+                {#each agg.per_chromosome as c}
+                  <span class="chr-mini-badge" style="background: {files[c.genome_index]?.color}20; color: {files[c.genome_index]?.color}; border-color: {files[c.genome_index]?.color}">
+                    G{c.genome_index} Chr{c.chromosome}: {c.count}
                   </span>
                 {/each}
               </div>
@@ -392,20 +283,8 @@
 
       {#if totOvPages > 1}
         <div class="pagination">
-          <button
-            class="page-btn"
-            on:click={() => goToOvPage(1)}
-            disabled={ovPage === 1}
-          >
-            ««
-          </button>
-          <button
-            class="page-btn"
-            on:click={() => goToOvPage(ovPage - 1)}
-            disabled={ovPage === 1}
-          >
-            «
-          </button>
+          <button class="page-btn" on:click={() => goToOvPage(1)} disabled={ovPage === 1}>««</button>
+          <button class="page-btn" on:click={() => goToOvPage(ovPage - 1)} disabled={ovPage === 1}>«</button>
 
           {#if editOvPage}
             <input
@@ -422,30 +301,14 @@
               on:dblclick={startEditOvPage}
               role="button"
               tabindex="0"
-              on:keydown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  startEditOvPage();
-                }
-              }}
+              on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') startEditOvPage(); }}
             >
               ({ovPage} / {totOvPages})
             </span>
           {/if}
 
-          <button
-            class="page-btn"
-            on:click={() => goToOvPage(ovPage + 1)}
-            disabled={ovPage === totOvPages}
-          >
-            »
-          </button>
-          <button
-            class="page-btn"
-            on:click={() => goToOvPage(totOvPages)}
-            disabled={ovPage === totOvPages}
-          >
-            »»
-          </button>
+          <button class="page-btn" on:click={() => goToOvPage(ovPage + 1)} disabled={ovPage === totOvPages}>»</button>
+          <button class="page-btn" on:click={() => goToOvPage(totOvPages)} disabled={ovPage === totOvPages}>»»</button>
         </div>
       {/if}
     </div>
@@ -564,22 +427,13 @@
 
       <div class="search-container">
         <div class="search-type-toggle">
-          <button
-            class:active={mtcType === 'sequence'}
-            on:click={() => setMtcType('sequence')}
-          >
+          <button class:active={mtcType === 'sequence'} on:click={() => setMtcType('sequence')}>
             Sequence ID
           </button>
-          <button
-            class:active={mtcType === 'chromosome'}
-            on:click={() => setMtcType('chromosome')}
-          >
+          <button class:active={mtcType === 'chromosome'} on:click={() => setMtcType('chromosome')}>
             Chromosome
           </button>
-          <button
-            class:active={mtcType === 'confidence'}
-            on:click={() => setMtcType('confidence')}
-          >
+          <button class:active={mtcType === 'confidence'} on:click={() => setMtcType('confidence')}>
             Confidence
           </button>
         </div>
@@ -628,20 +482,8 @@
 
       {#if totMtcPages > 1}
         <div class="pagination">
-          <button
-            class="page-btn"
-            on:click={() => goToMtcPage(1)}
-            disabled={mtcPage === 1}
-          >
-            ««
-          </button>
-          <button
-            class="page-btn"
-            on:click={() => goToMtcPage(mtcPage - 1)}
-            disabled={mtcPage === 1}
-          >
-            «
-          </button>
+          <button class="page-btn" on:click={() => goToMtcPage(1)} disabled={mtcPage === 1}>««</button>
+          <button class="page-btn" on:click={() => goToMtcPage(mtcPage - 1)} disabled={mtcPage === 1}>«</button>
 
           {#if editMtcPage}
             <input
@@ -658,30 +500,14 @@
               on:dblclick={startEditMtcPage}
               role="button"
               tabindex="0"
-              on:keydown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  startEditMtcPage();
-                }
-              }}
+              on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') startEditMtcPage(); }}
             >
               ({mtcPage} / {totMtcPages})
             </span>
           {/if}
 
-          <button
-            class="page-btn"
-            on:click={() => goToMtcPage(mtcPage + 1)}
-            disabled={mtcPage === totMtcPages}
-          >
-            »
-          </button>
-          <button
-            class="page-btn"
-            on:click={() => goToMtcPage(totMtcPages)}
-            disabled={mtcPage === totMtcPages}
-          >
-            »»
-          </button>
+          <button class="page-btn" on:click={() => goToMtcPage(mtcPage + 1)} disabled={mtcPage === totMtcPages}>»</button>
+          <button class="page-btn" on:click={() => goToMtcPage(totMtcPages)} disabled={mtcPage === totMtcPages}>»»</button>
         </div>
       {/if}
     </div>

@@ -29,94 +29,55 @@ export interface AreaFltState {
   qry: string;
 }
 
+const DONUT_DEF: DonutFltState = {
+  selSeqId: '',
+  selGen1: '',
+  selGen2: '',
+  selChr: '',
+  selGenForChr: '',
+  showDups: false,
+  scale: 1.0,
+};
+
+const AREA_DEF: AreaFltState = {
+  selFiles: [0],
+  selChr: 1,
+  winSize: 100000,
+  curWinIdx: 0,
+  qry: '',
+};
+
 const AREA_LS_KEY = 'areaFltSt';
 
 function makeDonutFltStore() {
-  const def: DonutFltState = {
-    selSeqId: '',
-    selGen1: '',
-    selGen2: '',
-    selChr: '',
-    selGenForChr: '',
-    showDups: false,
-    scale: 1.0
-  };
-
-  const { subscribe, set, update } = writable<DonutFltState>(def);
-
-  return {
-    subscribe,
-    set,
-    update,
-    reset: () => set(def)
-  };
+  const { subscribe, set, update } = writable<DonutFltState>({ ...DONUT_DEF });
+  return { subscribe, set, update, reset: () => set({ ...DONUT_DEF }) };
 }
 
 function makeAreaFltStore() {
   const init = (): AreaFltState => {
-    if (!browser) {
-      return {
-        selFiles: [0],
-        selChr: 1,
-        winSize: 100000,
-        curWinIdx: 0,
-        qry: ''
-      };
-    }
-
+    if (!browser) return { ...AREA_DEF };
     const stored = localStorage.getItem(AREA_LS_KEY);
     if (stored) {
-      try {
-        return JSON.parse(stored);
-      } catch (e) {
-        console.error('Failed to parse stored filter state:', e);
-      }
+      try { return JSON.parse(stored); }
+      catch (e) { console.error('Failed to parse stored filter state:', e); }
     }
+    return { ...AREA_DEF };
+  };
 
-    return {
-      selFiles: [0],
-      selChr: 1,
-      winSize: 100000,
-      curWinIdx: 0,
-      qry: ''
-    };
+  const persist = (v: AreaFltState) => {
+    if (browser) localStorage.setItem(AREA_LS_KEY, JSON.stringify(v));
   };
 
   const { subscribe, set, update } = writable<AreaFltState>(init());
 
   return {
     subscribe,
-
-    set: (v: AreaFltState) => {
-      if (browser) {
-        localStorage.setItem(AREA_LS_KEY, JSON.stringify(v));
-      }
-      set(v);
-    },
-
+    set: (v: AreaFltState) => { persist(v); set(v); },
     update: (fn: (s: AreaFltState) => AreaFltState) => {
-      update((s) => {
-        const next = fn(s);
-        if (browser) {
-          localStorage.setItem(AREA_LS_KEY, JSON.stringify(next));
-        }
-        return next;
-      });
+      update(s => { const n = fn(s); persist(n); return n; });
     },
-
-    reset: () => {
-      const def: AreaFltState = {
-        selFiles: [0],
-        selChr: 1,
-        winSize: 100000,
-        curWinIdx: 0,
-        qry: ''
-      };
-      if (browser) {
-        localStorage.setItem(AREA_LS_KEY, JSON.stringify(def));
-      }
-      set(def);
-    }
+    reset: () => { persist(AREA_DEF); set({ ...AREA_DEF }); },
   };
 }
 

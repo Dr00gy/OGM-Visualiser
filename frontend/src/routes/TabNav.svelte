@@ -1,7 +1,5 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import SunIcon from '$lib/assets/sun.svg';
-  import MoonIcon from '$lib/assets/moon.svg';
   export let activeTab: 'viz' | 'anlys' = 'viz';
   const dispatch = createEventDispatcher<{ tabChange: 'viz' | 'anlys' }>();
 

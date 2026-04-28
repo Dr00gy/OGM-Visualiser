@@ -1,11 +1,9 @@
 <script lang="ts">
   // The "Analytic Browser" tab: window-at-a-time view of sequence alignments
-  // on a chosen chromosome, rendered as stacked horizontal bars. Heavy
-  // caching (color, bar geometry, stacked tracks) plus an IntersectionObserver
-  // gate so nothing computes until the tab is actually visible.
+  // on a chosen chromosome. Heavy caching plus an IntersectionObserver gate.
 
   import { onMount, onDestroy } from 'svelte';
-  import type { BackendMatch, ChromosomeInfo } from '$lib/bincodeDecoder';
+  import type { ChromosomeInfo } from '$lib/bincodeDecoder';
   import type { FileData } from '$lib/types';
   import { searchStore } from '$lib/searchStore';
   import { areaFltState } from '$lib/filterStateStore';
@@ -17,19 +15,13 @@
     type SeqLocation,
   } from '$lib/queryClient';
 
-  // All data flows in from +page.svelte. Component fetches chromosome
-  // data via sessId once isQueryable && isVisible.
-  export let matches: BackendMatch[] = [];
-  /** One entry per genome (2–3). */
   export let files: FileData[] = [];
   /** Flat file_index → genome index. */
   export let fileToGen: number[] = [];
   /** Per-genome chromosome info (ref_contig_id + ref_len). */
   export let chrInfo: ChromosomeInfo[][] = [];
-
   /** Session id for backend queries. */
   export let sessId: string | null = null;
-
   /** True once match phase has completed. Fetches gated on this. */
   export let isQueryable: boolean = false;
 
@@ -46,8 +38,6 @@
   let hoverRec: any = null;
 
   // Chromosome-record cache. Key: `"{sorted genome indices}|{chromosome}"`.
-  // Invalidated when selGens or sessId changes.
-
   let chrRecCache = new Map<string, ChrRecsResponse>();
   let chrRecsAbort: AbortController | null = null;
   let chrRecsLdg = false;
@@ -59,14 +49,25 @@
     return `${[...genomes].sort((a, b) => a - b).join(',')}|${chr}`;
   }
 
-  async function reloadChrRecs() {
-    if (!sessId || !isQueryable || !isVisible) {
-      chrRecs = [];
-      chrRefLenFetched = 0;
-      chrRecsActKey = null;
-      return;
+  /** Cache lookup; falls through to a fetch when not cached. Returns null if unavailable. */
+  async function getOrFetchChr(chr: number, signal?: AbortSignal): Promise<ChrRecsResponse | null> {
+    const key = cacheKey(selGens, chr);
+    const cached = chrRecCache.get(key);
+    if (cached) return cached;
+    if (!sessId || !isQueryable) return null;
+    try {
+      const resp = await fetchChrRecs(sessId, { genomes: selGens, chr, signal });
+      if (!resp) return null;
+      chrRecCache.set(key, resp);
+      return resp;
+    } catch (err) {
+      console.error('Chromosome records fetch failed:', err);
+      return null;
     }
-    if (selGens.length === 0) {
+  }
+
+  async function reloadChrRecs() {
+    if (!sessId || !isQueryable || !isVisible || selGens.length === 0) {
       chrRecs = [];
       chrRefLenFetched = 0;
       chrRecsActKey = null;
@@ -74,7 +75,6 @@
     }
 
     const key = cacheKey(selGens, selChr);
-
     const cached = chrRecCache.get(key);
     if (cached) {
       chrRecs = cached.records;
@@ -84,74 +84,59 @@
       return;
     }
 
-    if (chrRecsAbort) {
-      chrRecsAbort.abort();
-    }
+    if (chrRecsAbort) chrRecsAbort.abort();
     chrRecsAbort = new AbortController();
     const signal = chrRecsAbort.signal;
-
     const chipTimer = setTimeout(() => { chrRecsLdg = true; }, 200);
 
     try {
-      const resp = await fetchChrRecs(sessId, {
-        genomes: selGens,
-        chr: selChr,
-        signal,
-      });
-      if (resp === undefined) return;
-
-      const currentKey = cacheKey(selGens, selChr);
-      if (key !== currentKey) return;
-
-      chrRecCache.set(key, resp);
+      const resp = await getOrFetchChr(selChr, signal);
+      if (!resp) return;
+      // Stale-key guard: another switch may have happened.
+      if (key !== cacheKey(selGens, selChr)) return;
       chrRecs = resp.records;
       chrRefLenFetched = resp.chromosome_ref_len;
       chrRecsActKey = key;
       clearCaches();
-    } catch (err) {
-      console.error('Failed to fetch chromosome records:', err);
-      chrRecs = [];
-      chrRefLenFetched = 0;
     } finally {
       clearTimeout(chipTimer);
       chrRecsLdg = false;
     }
   }
 
-  // Refetch when any dep changes. Stale-key check + AbortController
-  // handle in-flight switches.
+  // Refetch when any dep changes.
   $: {
-    void sessId;
-    void isQueryable;
-    void isVisible;
-    void selGens;
-    void selChr;
+    void sessId; void isQueryable; void isVisible; void selGens; void selChr;
     reloadChrRecs();
   }
 
-  // Invalidate cache on genome-selection change.
+  // Track sessId and selGens; invalidate both caches whenever either changes.
+  // On genome change, reload the active search; on session change, just reset.
+  let lastSessId: string | null | undefined = undefined;
   let lastGensKey = '';
   $: {
     const gk = [...selGens].sort((a, b) => a - b).join(',');
-    if (gk !== lastGensKey) {
-      lastGensKey = gk;
-      chrRecCache.clear();
-      chrRecsActKey = null;
-    }
-  }
+    const sessChanged = lastSessId !== sessId;
+    const gensChanged = lastGensKey !== gk;
 
-  // Invalidate cache on session change.
-  let lastSessId: string | null = null;
-  $: {
-    if (sessId !== lastSessId) {
+    if (sessChanged || gensChanged) {
       lastSessId = sessId;
+      lastGensKey = gk;
+
       chrRecCache.clear();
       chrRecsActKey = null;
+
+      seqLocsCache.clear();
+      if (seqLocsAbort) { seqLocsAbort.abort(); seqLocsAbort = null; }
+
+      if (gensChanged && isSrch && submittedQry) {
+        const id = parseInt(submittedQry);
+        if (!isNaN(id)) loadSeqLocs(id);
+      }
     }
   }
 
   // Sequence-location cache for the overview search.
-
   let seqLocsCache = new Map<number, SeqLocation[]>();
   let seqLocsAbort: AbortController | null = null;
 
@@ -172,9 +157,7 @@
     seqLocsAbort = new AbortController();
     try {
       const resp = await fetchSeqLocations(sessId, {
-        qry: seqId,
-        genomes: selGens,
-        signal: seqLocsAbort.signal,
+        qry: seqId, genomes: selGens, signal: seqLocsAbort.signal,
       });
       if (!resp) return;
       seqLocsCache.set(seqId, resp.locations);
@@ -199,46 +182,13 @@
     activeSeqLocs = null;
   }
 
-  // Invalidate seq-locations cache on genome change.
-  let lastLocGensKey = '';
-  $: {
-    const gk = [...selGens].sort((a, b) => a - b).join(',');
-    if (gk !== lastLocGensKey) {
-      lastLocGensKey = gk;
-      seqLocsCache.clear();
-      if (seqLocsAbort) {
-        seqLocsAbort.abort();
-        seqLocsAbort = null;
-      }
-      if (isSrch && submittedQry) {
-        const id = parseInt(submittedQry);
-        if (!Number.isNaN(id)) loadSeqLocs(id);
-      }
-    }
-  }
-
-  let lastLocSessId: string | null = null;
-  $: {
-    if (sessId !== lastLocSessId) {
-      lastLocSessId = sessId;
-      seqLocsCache.clear();
-      if (seqLocsAbort) {
-        seqLocsAbort.abort();
-        seqLocsAbort = null;
-      }
-    }
-  }
-
-
   let srchQry = '';
   let submittedQry = '';
-
   /** Window indices containing at least one hit for the searched seq. */
   let fltWins: number[] = [];
   let isSrch = false;
 
   let shouldRerun = false;
-
   let ovPanelOpen = false;
 
   /** One dot (hit cluster) on a chromosome line. */
@@ -264,9 +214,7 @@
     _selGens: number[],
   ): ChrLine[] {
     const sorted = [...chrInfoForGen].sort((a, b) => a.ref_contig_id - b.ref_contig_id);
-
     const genIsSel = _selGens.includes(genIdx);
-
     const locs: SeqLocation[] = activeSeqLocs ?? [];
 
     return sorted.map(chr => {
@@ -298,14 +246,8 @@
 
           const relStart = Math.max(0, loc.ref_start_pos - rangeMin);
           const relEnd   = Math.max(0, loc.ref_end_pos   - rangeMin);
-          const startWin = Math.min(
-            totWinsForChr - 1,
-            Math.floor(relStart / winSize),
-          );
-          const endWin = Math.min(
-            totWinsForChr - 1,
-            Math.floor(relEnd / winSize),
-          );
+          const startWin = Math.min(totWinsForChr - 1, Math.floor(relStart / winSize));
+          const endWin   = Math.min(totWinsForChr - 1, Math.floor(relEnd   / winSize));
           for (let w = startWin; w <= endWin; w++) {
             if (w >= 0) hitWins.add(w);
           }
@@ -313,22 +255,14 @@
 
         for (const winIdx of hitWins) {
           const winCenterRel = (winIdx + 0.5) * winSize;
-          const xFrac = windowedSpan > 0
-            ? Math.min(1, winCenterRel / windowedSpan)
-            : 0;
-
+          const xFrac = windowedSpan > 0 ? Math.min(1, winCenterRel / windowedSpan) : 0;
           dots.push({ xFrac, estWin: winIdx });
         }
 
         dots.sort((a, b) => a.xFrac - b.xFrac);
       }
 
-      return {
-        chrId: chr.ref_contig_id,
-        refLen,
-        markers,
-        dots,
-      };
+      return { chrId: chr.ref_contig_id, refLen, markers, dots };
     });
   }
 
@@ -346,9 +280,7 @@
     _winSize: number,
     _selGens: number[],
   ): { genName: string; genColor: string; lines: ChrLine[] }[] {
-    const searchSeqId = (isSrch && submittedQry)
-      ? parseInt(submittedQry)
-      : null;
+    const searchSeqId = (isSrch && submittedQry) ? parseInt(submittedQry) : null;
     const parsedSeqId = (searchSeqId !== null && !isNaN(searchSeqId)) ? searchSeqId : null;
 
     return chrInfo.map((ci, gi) => ({
@@ -360,46 +292,21 @@
 
   async function navFromDot(chrId: number, estWin: number) {
     selChr = chrId;
-
-    const key = cacheKey(selGens, chrId);
-    let newChrRecs: WireAreaRecord[] = [];
-    let newChrRange = { min: 0, max: 100000 };
-
-    const cached = chrRecCache.get(key);
-    if (cached) {
-      newChrRecs = cached.records;
-      newChrRange = getChrRange(newChrRecs);
-    } else if (sessId && isQueryable) {
-      try {
-        const resp = await fetchChrRecs(sessId, {
-          genomes: selGens,
-          chr: chrId,
-        });
-        if (resp) {
-          chrRecCache.set(key, resp);
-          newChrRecs = resp.records;
-          newChrRange = getChrRange(newChrRecs);
-        }
-      } catch (err) {
-        console.error('navFromDot fetch failed:', err);
-      }
-    }
+    const resp = await getOrFetchChr(chrId);
+    const newChrRecs = resp?.records ?? [];
+    const newChrRange = getChrRange(newChrRecs);
 
     let targetWin = estWin;
     if (isSrch && submittedQry) {
       const seqId = parseInt(submittedQry);
       if (!isNaN(seqId)) {
         fltWins = findWinsWithSeq(seqId, newChrRecs, newChrRange, winSize);
-
         if (fltWins.length > 0) {
           let nearest = fltWins[0];
           let bestDist = Math.abs(nearest - estWin);
           for (const w of fltWins) {
             const d = Math.abs(w - estWin);
-            if (d < bestDist) {
-              bestDist = d;
-              nearest = w;
-            }
+            if (d < bestDist) { bestDist = d; nearest = w; }
           }
           targetWin = nearest;
         }
@@ -407,13 +314,7 @@
     }
 
     curWinIdx = targetWin;
-
-    areaFltState.update(state => ({
-      ...state,
-      selChr: chrId,
-      curWinIdx: targetWin,
-    }));
-
+    areaFltState.update(state => ({ ...state, selChr: chrId, curWinIdx: targetWin }));
     clearCaches();
   }
 
@@ -435,28 +336,22 @@
     _winEnd: number,
     _files: FileData[],
   ): SeqComp {
-    if (_selGens.length < 2) {
-      return { shared: [], uniqPerGen: [], totUniq: 0 };
-    }
+    if (_selGens.length < 2) return { shared: [], uniqPerGen: [], totUniq: 0 };
 
     const genSeqs = new Map<number, Set<number>>();
-    for (const gi of _selGens) {
-      genSeqs.set(gi, new Set());
-    }
+    for (const gi of _selGens) genSeqs.set(gi, new Set());
 
     for (const record of _records) {
-      const gi = record.genome_index;
-      if (!genSeqs.has(gi)) continue;
+      const set = genSeqs.get(record.genome_index);
+      if (!set) continue;
       if (record.ref_end_pos >= _winStart && record.ref_start_pos <= _winEnd) {
-        genSeqs.get(gi)!.add(record.qry_contig_id);
+        set.add(record.qry_contig_id);
       }
     }
 
     const genSets = _selGens.map(gi => genSeqs.get(gi)!);
     const allSeqs = new Set<number>();
-    for (const s of genSets) {
-      for (const id of s) allSeqs.add(id);
-    }
+    for (const s of genSets) for (const id of s) allSeqs.add(id);
 
     const shared: number[] = [];
     const sharedSet = new Set<number>();
@@ -468,23 +363,14 @@
     }
     shared.sort((a, b) => a - b);
 
-    const uniqPerGen = _selGens.map(gi => {
-      const uniq = Array.from(genSeqs.get(gi)!)
-        .filter(id => !sharedSet.has(id))
-        .sort((a, b) => a - b);
-      return {
-        genIdx: gi,
-        genName: _files[gi]?.name ?? `Genome ${gi}`,
-        genColor: _files[gi]?.color ?? '#888',
-        seqIds: uniq,
-      };
-    });
+    const uniqPerGen = _selGens.map(gi => ({
+      genIdx: gi,
+      genName: _files[gi]?.name ?? `Genome ${gi}`,
+      genColor: _files[gi]?.color ?? '#888',
+      seqIds: Array.from(genSeqs.get(gi)!).filter(id => !sharedSet.has(id)).sort((a, b) => a - b),
+    }));
 
-    return {
-      shared,
-      uniqPerGen,
-      totUniq: allSeqs.size,
-    };
+    return { shared, uniqPerGen, totUniq: allSeqs.size };
   }
 
   $: winComp = compPanelOpen
@@ -493,15 +379,12 @@
 
   // Color cache: stable HSL per sequence id.
   const colorCache = new Map<number, string>();
-
   function seqColor(seqId: number): string {
-    if (colorCache.has(seqId)) {
-      return colorCache.get(seqId)!;
-    }
-    const hue = (seqId * 137.508) % 360;
-    const color = `hsl(${hue}, 70%, 60%)`;
-    colorCache.set(seqId, color);
-    return color;
+    let c = colorCache.get(seqId);
+    if (c) return c;
+    c = `hsl(${(seqId * 137.508) % 360}, 70%, 60%)`;
+    colorCache.set(seqId, c);
+    return c;
   }
 
   // Bar geometry cache.
@@ -517,14 +400,8 @@
   let cachedBars: CachedBar[][] = [];
   let lastWinStart = -1;
   let lastWinEnd = -1;
-  let lastFltRecs: any[] = [];
 
-  // Stacked-bar memoisation.
-  let lastStackIn: {
-    records: any[];
-    winStart: number;
-    winEnd: number;
-  } | null = null;
+  let lastStackIn: { records: any[]; winStart: number; winEnd: number } | null = null;
   let cachedStacked: any[][] = [];
 
   function getCachedStacked(records: any[], winStart: number, winEnd: number): any[][] {
@@ -536,54 +413,40 @@
     ) {
       return cachedStacked;
     }
-
-    const stacked = stackBars(records, winStart, winEnd);
-
+    cachedStacked = stackBars(records, winStart, winEnd);
     lastStackIn = { records, winStart, winEnd };
-    cachedStacked = stacked;
-
-    return stacked;
+    return cachedStacked;
   }
 
   function genCachedBars(
     stacked: any[][],
     winStart: number,
     winEnd: number,
-    winSize: number
+    winSize: number,
   ): CachedBar[][] {
-    if (
-      lastWinStart === winStart &&
-      lastWinEnd === winEnd &&
-      stacked === cachedStacked
-    ) {
+    if (lastWinStart === winStart && lastWinEnd === winEnd && stacked === cachedStacked) {
       return cachedBars;
     }
 
     const newCache: CachedBar[][] = [];
-
-    for (let trackIdx = 0; trackIdx < stacked.length; trackIdx++) {
-      const track = stacked[trackIdx];
+    for (const track of stacked) {
       const cachedTrack: CachedBar[] = [];
-
-      for (let recIdx = 0; recIdx < track.length; recIdx++) {
-        const record = track[recIdx];
+      for (const record of track) {
         const startX = posToX(record.ref_start_pos, winStart, winSize);
         const endX = posToX(record.ref_end_pos, winStart, winSize);
-        const width = endX - startX;
-        const color = seqColor(record.qry_contig_id);
-        const key = `${record.qry_contig_id}-${record.ref_start_pos}-${record.ref_end_pos}-${record.file_index}`;
-
-        cachedTrack.push({ record, startX, endX, width, color, key });
+        cachedTrack.push({
+          record, startX, endX,
+          width: endX - startX,
+          color: seqColor(record.qry_contig_id),
+          key: `${record.qry_contig_id}-${record.ref_start_pos}-${record.ref_end_pos}-${record.file_index}`,
+        });
       }
-
       newCache.push(cachedTrack);
     }
 
     lastWinStart = winStart;
     lastWinEnd = winEnd;
-    lastFltRecs = stacked.flat();
     cachedBars = newCache;
-
     return newCache;
   }
 
@@ -591,14 +454,12 @@
     cachedBars = [];
     lastWinStart = -1;
     lastWinEnd = -1;
-    lastFltRecs = [];
     lastStackIn = null;
     cachedStacked = [];
   }
 
   // IntersectionObserver-driven lazy init.
   let observer: IntersectionObserver;
-
   let unsubSrch: (() => void) | null = null;
   let unsubFlt: (() => void) | null = null;
 
@@ -608,9 +469,7 @@
     unsubSrch = searchStore.subscribe(state => {
       if (state.areaQry !== srchQry) {
         srchQry = state.areaQry;
-        if (srchQry.trim() && shouldRerun) {
-          runSearch(srchQry.trim());
-        }
+        if (srchQry.trim() && shouldRerun) runSearch(srchQry.trim());
       }
     });
 
@@ -621,58 +480,33 @@
       curWinIdx = state.curWinIdx;
       submittedQry = state.qry || '';
 
-      if (submittedQry.trim()) {
-        isSrch = true;
-        srchQry = submittedQry;
-
-        const seqId = parseInt(submittedQry.trim());
-        if (!isNaN(seqId)) {
-          (async () => {
-            const key = cacheKey(selGens, selChr);
-            let records: WireAreaRecord[] = [];
-            const cached = chrRecCache.get(key);
-            if (cached) {
-              records = cached.records;
-            } else if (sessId && isQueryable) {
-              try {
-                const resp = await fetchChrRecs(sessId, {
-                  genomes: selGens,
-                  chr: selChr,
-                });
-                if (resp) {
-                  chrRecCache.set(key, resp);
-                  records = resp.records;
-                }
-              } catch (err) {
-                console.error('Restored-search records fetch failed:', err);
-              }
-            }
-            const range = getChrRange(records);
-            fltWins = findWinsWithSeq(seqId, records, range, winSize);
-
-            if (fltWins.length > 0) {
-              if (!fltWins.includes(curWinIdx)) {
-                curWinIdx = fltWins[0];
-                areaFltState.update(s => ({
-                  ...s,
-                  curWinIdx: curWinIdx
-                }));
-              }
-            } else {
-              if (curWinIdx !== 0) {
-                curWinIdx = 0;
-                areaFltState.update(s => ({
-                  ...s,
-                  curWinIdx: 0
-                }));
-              }
-            }
-          })();
-        }
-      } else {
+      if (!submittedQry.trim()) {
         isSrch = false;
         fltWins = [];
+        return;
       }
+
+      isSrch = true;
+      srchQry = submittedQry;
+      const seqId = parseInt(submittedQry.trim());
+      if (isNaN(seqId)) return;
+
+      (async () => {
+        const resp = await getOrFetchChr(selChr);
+        const records = resp?.records ?? [];
+        const range = getChrRange(records);
+        fltWins = findWinsWithSeq(seqId, records, range, winSize);
+
+        if (fltWins.length > 0) {
+          if (!fltWins.includes(curWinIdx)) {
+            curWinIdx = fltWins[0];
+            areaFltState.update(s => ({ ...s, curWinIdx }));
+          }
+        } else if (curWinIdx !== 0) {
+          curWinIdx = 0;
+          areaFltState.update(s => ({ ...s, curWinIdx: 0 }));
+        }
+      })();
     });
   }
 
@@ -696,12 +530,10 @@
           }
         });
       },
-      { root: null, rootMargin: '50px', threshold: 0.1 }
+      { root: null, rootMargin: '50px', threshold: 0.1 },
     );
 
-    if (containerEl) {
-      observer.observe(containerEl);
-    }
+    if (containerEl) observer.observe(containerEl);
   });
 
   function runSearch(query: string) {
@@ -711,32 +543,25 @@
     }
 
     const seqId = parseInt(query.trim());
-    if (!isNaN(seqId)) {
-      submittedQry = query.trim();
-      isSrch = true;
+    if (isNaN(seqId)) return;
 
-      const range = getChrRange(chrRecs);
-      fltWins = findWinsWithSeq(seqId, chrRecs, range, winSize);
+    submittedQry = query.trim();
+    isSrch = true;
 
-      const targetIdx = fltWins.length > 0
-        ? (fltWins.includes(curWinIdx) ? curWinIdx : fltWins[0])
-        : 0;
-      curWinIdx = targetIdx;
+    const range = getChrRange(chrRecs);
+    fltWins = findWinsWithSeq(seqId, chrRecs, range, winSize);
 
-      areaFltState.update(state => ({
-        ...state,
-        qry: submittedQry,
-        curWinIdx: targetIdx
-      }));
+    const targetIdx = fltWins.length > 0
+      ? (fltWins.includes(curWinIdx) ? curWinIdx : fltWins[0])
+      : 0;
+    curWinIdx = targetIdx;
 
-      searchStore.update(state => ({ ...state, areaQry: query }));
-      clearCaches();
-    }
+    areaFltState.update(state => ({ ...state, qry: submittedQry, curWinIdx: targetIdx }));
+    searchStore.update(state => ({ ...state, areaQry: query }));
+    clearCaches();
   }
 
-  function onSearch() {
-    runSearch(srchQry.trim());
-  }
+  function onSearch() { runSearch(srchQry.trim()); }
 
   function getChrRange(records: any[]) {
     if (records.length === 0) return { min: 0, max: 100000 };
@@ -747,45 +572,28 @@
 
   function stackBars(records: any[], winStart: number, winEnd: number) {
     const visible = records.filter(r =>
-      r.ref_end_pos >= winStart && r.ref_start_pos <= winEnd
+      r.ref_end_pos >= winStart && r.ref_start_pos <= winEnd,
     );
-
     visible.sort((a, b) => a.ref_start_pos - b.ref_start_pos);
 
     const stacked: any[][] = [];
     for (const record of visible) {
       let placed = false;
-      for (let trackIdx = 0; trackIdx < stacked.length; trackIdx++) {
-        const track = stacked[trackIdx];
-
-        let hasOverlap = false;
-        for (const existing of track) {
-          if (record.ref_start_pos < existing.ref_end_pos &&
-              record.ref_end_pos > existing.ref_start_pos) {
-            hasOverlap = true;
-            break;
-          }
-        }
-
-        if (!hasOverlap) {
-          track.push(record);
-          placed = true;
-          break;
-        }
+      for (const track of stacked) {
+        const overlap = track.some(existing =>
+          record.ref_start_pos < existing.ref_end_pos &&
+          record.ref_end_pos > existing.ref_start_pos,
+        );
+        if (!overlap) { track.push(record); placed = true; break; }
       }
-
-      if (!placed) {
-        stacked.push([record]);
-      }
+      if (!placed) stacked.push([record]);
     }
 
     return stacked;
   }
 
   function posToX(pos: number, winStart: number, winSize: number): number {
-    const rel = pos - winStart;
-    const pct = (rel / winSize) * 100;
-    return Math.max(0, Math.min(100, pct));
+    return Math.max(0, Math.min(100, ((pos - winStart) / winSize) * 100));
   }
 
   function clampWinIdx(newGens: number[]): number {
@@ -794,9 +602,7 @@
     for (const gi of newGens) {
       const chrs = chrInfo[gi] ?? [];
       for (const c of chrs) {
-        if (c.ref_contig_id === selChr && c.ref_len > refLen) {
-          refLen = c.ref_len;
-        }
+        if (c.ref_contig_id === selChr && c.ref_len > refLen) refLen = c.ref_len;
       }
     }
     const newTotWins = Math.ceil(refLen / winSize);
@@ -804,24 +610,15 @@
   }
 
   function toggleGen(genIdx: number) {
-    let newSelGens: number[];
-
-    if (selGens.includes(genIdx)) {
-      newSelGens = selGens.filter(i => i !== genIdx);
-    } else {
-      newSelGens = [...selGens, genIdx].sort((a, b) => a - b);
-    }
+    const newSelGens = selGens.includes(genIdx)
+      ? selGens.filter(i => i !== genIdx)
+      : [...selGens, genIdx].sort((a, b) => a - b);
 
     const clamped = clampWinIdx(newSelGens);
     selGens = newSelGens;
     curWinIdx = clamped;
 
-    areaFltState.update(state => ({
-      ...state,
-      selFiles: newSelGens,
-      curWinIdx: clamped
-    }));
-
+    areaFltState.update(state => ({ ...state, selFiles: newSelGens, curWinIdx: clamped }));
     clearCaches();
     resetSrch(clamped);
   }
@@ -832,12 +629,7 @@
     selGens = all;
     curWinIdx = clamped;
 
-    areaFltState.update(state => ({
-      ...state,
-      selFiles: all,
-      curWinIdx: clamped
-    }));
-
+    areaFltState.update(state => ({ ...state, selFiles: all, curWinIdx: clamped }));
     clearCaches();
     resetSrch(clamped);
   }
@@ -845,13 +637,7 @@
   function clearGens() {
     selGens = [];
     curWinIdx = 0;
-
-    areaFltState.update(state => ({
-      ...state,
-      selFiles: [],
-      curWinIdx: 0
-    }));
-
+    areaFltState.update(state => ({ ...state, selFiles: [], curWinIdx: 0 }));
     clearCaches();
     resetSrch();
   }
@@ -864,57 +650,38 @@
     curWinIdx = preserved;
 
     searchStore.update(state => ({ ...state, areaQry: '' }));
-    areaFltState.update(state => ({
-      ...state,
-      qry: '',
-      curWinIdx: preserved
-    }));
-
+    areaFltState.update(state => ({ ...state, qry: '', curWinIdx: preserved }));
     clearCaches();
   }
 
   function findWinsWithSeq(seqId: number, records: any[], range: any, winSize: number): number[] {
-    const seqRecs = records.filter(record => record.qry_contig_id === seqId);
-    if (seqRecs.length === 0) return [];
-
     const wins = new Set<number>();
-
-    for (const record of seqRecs) {
-      const startWin = Math.floor((record.ref_start_pos - range.min) / winSize);
-      const endWin = Math.floor((record.ref_end_pos - range.min) / winSize);
-
-      for (let w = startWin; w <= endWin; w++) {
-        if (w >= 0) {
-          wins.add(w);
-        }
-      }
+    for (const r of records) {
+      if (r.qry_contig_id !== seqId) continue;
+      const startWin = Math.floor((r.ref_start_pos - range.min) / winSize);
+      const endWin   = Math.floor((r.ref_end_pos   - range.min) / winSize);
+      for (let w = startWin; w <= endWin; w++) if (w >= 0) wins.add(w);
     }
-
     return Array.from(wins).sort((a, b) => a - b);
   }
 
   function onSearchKeydown(e: KeyboardEvent) {
-    if (e.key === 'Enter') {
-      onSearch();
-    } else if (e.key === 'Escape') {
-      resetSrch();
-    }
+    if (e.key === 'Enter') onSearch();
+    else if (e.key === 'Escape') resetSrch();
   }
 
-  function clearSrch() {
-    resetSrch();
-  }
+  function clearSrch() { resetSrch(); }
 
   function nextWin() {
     if (isSrch && fltWins.length > 0) {
       const inFlt = fltWins.indexOf(curWinIdx);
       if (inFlt < fltWins.length - 1) {
         curWinIdx = fltWins[inFlt + 1];
-        areaFltState.update(state => ({ ...state, curWinIdx: curWinIdx }));
+        areaFltState.update(s => ({ ...s, curWinIdx }));
       }
     } else {
       curWinIdx++;
-      areaFltState.update(state => ({ ...state, curWinIdx: curWinIdx }));
+      areaFltState.update(s => ({ ...s, curWinIdx }));
     }
   }
 
@@ -923,19 +690,18 @@
       const inFlt = fltWins.indexOf(curWinIdx);
       if (inFlt > 0) {
         curWinIdx = fltWins[inFlt - 1];
-        areaFltState.update(state => ({ ...state, curWinIdx: curWinIdx }));
+        areaFltState.update(s => ({ ...s, curWinIdx }));
       }
     } else {
       curWinIdx--;
-      areaFltState.update(state => ({ ...state, curWinIdx: curWinIdx }));
+      areaFltState.update(s => ({ ...s, curWinIdx }));
     }
   }
 
   $: fltChrRecs = isSrch
-    ? chrRecs.filter(record => {
+    ? chrRecs.filter(r => {
         const seqId = parseInt(submittedQry);
-        if (isNaN(seqId)) return false;
-        return record.qry_contig_id === seqId;
+        return !isNaN(seqId) && r.qry_contig_id === seqId;
       })
     : chrRecs;
   $: chrRange = getChrRange(chrRecs);
@@ -945,43 +711,27 @@
 
   $: totWins = Math.ceil(chrRefLen / winSize);
   $: effTotWins = isSrch ? fltWins.length : totWins;
-  $: effCurWinIdx = isSrch ?
-    (fltWins.indexOf(curWinIdx) + 1 || 1) :
-    (curWinIdx + 1);
+  $: effCurWinIdx = isSrch ? (fltWins.indexOf(curWinIdx) + 1 || 1) : (curWinIdx + 1);
 
   $: winStart = chrRange.min + (curWinIdx * winSize);
   $: winEnd = Math.min(winStart + winSize, chrRefLen);
 
-  /** Memoised stacked tracks for this window. */
   $: stacked = isVisible ? getCachedStacked(fltChrRecs, winStart, winEnd) : [];
-  /** Memoised bar geometry. */
   $: bars = isVisible ? genCachedBars(stacked, winStart, winEnd, winSize) : [];
-  /** Sorted unique sequence ids — drives the legend list. */
   $: uniqSeqs = Array.from(new Set(fltChrRecs.map(r => r.qry_contig_id))).sort((a, b) => a - b);
 
-  $: canGoPrev = isSrch ?
-    fltWins.indexOf(curWinIdx) > 0 :
-    curWinIdx > 0;
-  $: canGoNext = isSrch ?
-    fltWins.indexOf(curWinIdx) < fltWins.length - 1 :
-    curWinIdx < totWins - 1;
+  $: canGoPrev = isSrch ? fltWins.indexOf(curWinIdx) > 0 : curWinIdx > 0;
+  $: canGoNext = isSrch
+    ? fltWins.indexOf(curWinIdx) < fltWins.length - 1
+    : curWinIdx < totWins - 1;
 
   const CHRS = Array.from({ length: 24 }, (_, i) => i + 1);
 
   function onChrChange() {
     curWinIdx = 0;
-
-    areaFltState.update(state => ({
-      ...state,
-      selChr: selChr,
-      curWinIdx: 0
-    }));
-
+    areaFltState.update(state => ({ ...state, selChr, curWinIdx: 0 }));
     clearCaches();
-
-    if (isSrch && submittedQry) {
-      runSearch(submittedQry);
-    }
+    if (isSrch && submittedQry) runSearch(submittedQry);
   }
 
   let editWinPage = false;
@@ -999,20 +749,16 @@
         const newFltIdx = Math.max(0, Math.min(n - 1, fltWins.length - 1));
         curWinIdx = fltWins[newFltIdx];
       } else {
-        const newIdx = Math.max(0, Math.min(n - 1, totWins - 1));
-        curWinIdx = newIdx;
+        curWinIdx = Math.max(0, Math.min(n - 1, totWins - 1));
       }
-      areaFltState.update(state => ({ ...state, curWinIdx: curWinIdx }));
+      areaFltState.update(state => ({ ...state, curWinIdx }));
     }
     editWinPage = false;
   }
 
   function onWinPageKeydown(e: KeyboardEvent) {
-    if (e.key === 'Enter') {
-      submitWinJump();
-    } else if (e.key === 'Escape') {
-      editWinPage = false;
-    }
+    if (e.key === 'Enter') submitWinJump();
+    else if (e.key === 'Escape') editWinPage = false;
   }
 
   /** Flat lookup map from bar key → record. */
@@ -1020,9 +766,7 @@
   $: {
     barKeyMap = new Map();
     for (const track of bars) {
-      for (const bar of track) {
-        barKeyMap.set(bar.key, bar.record);
-      }
+      for (const bar of track) barKeyMap.set(bar.key, bar.record);
     }
   }
 
@@ -1033,14 +777,11 @@
       if (hoverRec !== null) hoverRec = null;
       return;
     }
-    const key = target.dataset.contigKey!;
-    const record = barKeyMap.get(key) ?? null;
+    const record = barKeyMap.get(target.dataset.contigKey!) ?? null;
     if (hoverRec !== record) hoverRec = record;
   }
 
-  function onBarMouseLeave() {
-    hoverRec = null;
-  }
+  function onBarMouseLeave() { hoverRec = null; }
 
   onDestroy(() => {
     if (unsubSrch) unsubSrch();

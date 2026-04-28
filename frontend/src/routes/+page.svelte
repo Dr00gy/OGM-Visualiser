@@ -2,7 +2,6 @@
   import { onMount } from 'svelte';
   import {
     processMatchStream,
-    type BackendMatch,
     type ChromosomeInfo,
   } from '$lib/bincodeDecoder';
   import { darkMode } from '$lib/darkModeStore';
@@ -26,9 +25,11 @@
   }
 
   const GEN_COLORS = ['#3b82f6', '#10b981', '#f59e0b'];
+  const API = 'http://localhost:8080';
+  const UP_CONCURRENCY = 3;
+
   let genomes: GenData[] = [];
   let fileToGen: number[] = [];
-  let matches: BackendMatch[] = [];
   let genRowCnts: number[] = [];
   let chrInfo: ChromosomeInfo[][] = [];
 
@@ -67,31 +68,23 @@
     }
   }
 
-  $: if (activeTab === 'anlys' && streamComplete) {
-    loadArea();
+  $: if (activeTab === 'anlys' && streamComplete) loadArea();
+
+  function deleteSession(id: string) {
+    void fetch(`${API}/api/session/${id}`, { method: 'DELETE' }).catch(() => {});
   }
 
   async function onFileUpload(genGroups: { seqFiles: File[]; refineFinalFile: File; dirName: string }[]) {
     if (!genGroups || genGroups.length < 2) return;
 
-    if (abortCtrl) {
-      abortCtrl.abort();
-    }
-
-    if (sessId) {
-      const oldId = sessId;
-      void fetch(`http://localhost:8080/api/session/${oldId}`, {
-        method: 'DELETE',
-      }).catch(() => {});
-      sessId = null;
-    }
+    if (abortCtrl) abortCtrl.abort();
+    if (sessId) { deleteSession(sessId); sessId = null; }
 
     abortCtrl = new AbortController();
     isLoading = true;
     isStreaming = true;
     streamComplete = false;
     error = '';
-    matches = [];
     chrInfo = [];
     mtcCnt = 0;
     recCnt = 0;
@@ -112,12 +105,12 @@
     genRowCnts = new Array(genomes.length).fill(0);
 
     fileToGen = genGroups.flatMap((g, gi) =>
-      Array.from({ length: g.seqFiles.length }, () => gi)
+      Array.from({ length: g.seqFiles.length }, () => gi),
     );
 
     try {
       loadingText = 'Creating session...';
-      const sessResp = await fetch('http://localhost:8080/api/session', {
+      const sessResp = await fetch(`${API}/api/session`, {
         method: 'POST',
         signal: abortCtrl.signal,
       });
@@ -140,23 +133,18 @@
 
       loadingText = `Uploading files (0/${totJobs})...`;
 
-      const UP_CONCURRENCY = 3;
-
       async function upOne(job: UpJob): Promise<void> {
         const fd = new FormData();
         fd.append(job.fieldName, job.file);
 
-        const resp = await fetch(
-          `http://localhost:8080/api/upload/${sessId}`,
-          {
-            method: 'POST',
-            body: fd,
-            signal: abortCtrl?.signal,
-          }
-        );
+        const resp = await fetch(`${API}/api/upload/${sessId}`, {
+          method: 'POST',
+          body: fd,
+          signal: abortCtrl?.signal,
+        });
         if (!resp.ok) {
           throw new Error(
-            `Upload failed for ${job.fieldName}: ${resp.status} ${resp.statusText}`
+            `Upload failed for ${job.fieldName}: ${resp.status} ${resp.statusText}`,
           );
         }
         doneJobs++;
@@ -174,7 +162,7 @@
       }
 
       await Promise.all(
-        Array.from({ length: Math.min(UP_CONCURRENCY, jobs.length) }, () => worker())
+        Array.from({ length: Math.min(UP_CONCURRENCY, jobs.length) }, () => worker()),
       );
 
       if (abortCtrl.signal.aborted) {
@@ -182,13 +170,10 @@
       }
 
       loadingText = 'Starting match...';
-      const resp = await fetch(
-        `http://localhost:8080/api/match/${sessId}`,
-        {
-          method: 'POST',
-          signal: abortCtrl.signal,
-        }
-      );
+      const resp = await fetch(`${API}/api/match/${sessId}`, {
+        method: 'POST',
+        signal: abortCtrl.signal,
+      });
 
       if (!resp.ok) {
         throw new Error(`Server error: ${resp.status} ${resp.statusText}`);
@@ -199,7 +184,7 @@
         if (abortCtrl?.signal.aborted) break;
 
         switch (frame.type) {
-          case 'chromosomeInfo': {
+          case 'chromosomeInfo':
             if (chrInfo.length === 0) {
               chrInfo = frame.chromosomeInfo;
               hasChrInfo = true;
@@ -207,47 +192,33 @@
               isLoading = false;
             }
             break;
-          }
 
-          case 'progress': {
+          case 'progress':
             mtcCnt = frame.progress.total_matches;
             recCnt = frame.progress.total_records;
             updateGenCntsFromBE(frame.progress.per_genome_records);
             await new Promise(resolve => setTimeout(resolve, 0));
             break;
-          }
 
-          case 'complete': {
+          case 'complete':
             mtcCnt = frame.complete.total_matches;
             recCnt = frame.complete.total_records;
             distSeqCnt = frame.complete.distinct_sequence_count;
             updateGenCntsFromBE(frame.complete.per_genome_records);
             gotComplete = true;
             break;
-          }
         }
       }
 
-      if (gotComplete) {
-        streamComplete = true;
-      }
+      if (gotComplete) streamComplete = true;
     } catch (err) {
       if (err instanceof Error) {
-        if (err.name === 'AbortError') {
-          error = 'Upload cancelled';
-        } else {
-          error = err.message;
-        }
+        error = err.name === 'AbortError' ? 'Upload cancelled' : err.message;
       } else {
         error = 'Unknown error occurred';
       }
 
-      if (sessId) {
-        void fetch(`http://localhost:8080/api/session/${sessId}`, {
-          method: 'DELETE',
-        }).catch(() => {});
-        sessId = null;
-      }
+      if (sessId) { deleteSession(sessId); sessId = null; }
     } finally {
       isLoading = false;
       isStreaming = false;
@@ -260,7 +231,6 @@
     genomes = [];
     genRowCnts = [];
     fileToGen = [];
-    matches = [];
     chrInfo = [];
     error = '';
     mtcCnt = 0;
@@ -269,30 +239,17 @@
     hasUploadedFiles = false;
     hasChrInfo = false;
     streamComplete = false;
-    if (abortCtrl) {
-      abortCtrl.abort();
-      abortCtrl = null;
-    }
-    if (sessId) {
-      void fetch(`http://localhost:8080/api/session/${sessId}`, {
-        method: 'DELETE',
-      }).catch(() => {});
-      sessId = null;
-    }
+    if (abortCtrl) { abortCtrl.abort(); abortCtrl = null; }
+    if (sessId) { deleteSession(sessId); sessId = null; }
   }
 
   function updateGenCntsFromBE(perGenRecs: number[]) {
     genRowCnts = genomes.map((_, i) => perGenRecs[i] ?? 0);
-    genomes = genomes.map((g, i) => ({
-      ...g,
-      rows: perGenRecs[i] ?? 0,
-    }));
+    genomes = genomes.map((g, i) => ({ ...g, rows: perGenRecs[i] ?? 0 }));
   }
 
   function cancelUpload() {
-    if (abortCtrl) {
-      abortCtrl.abort();
-    }
+    if (abortCtrl) abortCtrl.abort();
   }
 </script>
 
@@ -358,7 +315,6 @@
         <DonutVisualisation
           files={genomes}
           {fileToGen}
-          {matches}
           {chrInfo}
           {showDups}
           {sessId}
@@ -374,7 +330,6 @@
         {#if AreaAnalysis}
           <svelte:component
             this={AreaAnalysis}
-            {matches}
             files={genomes}
             {fileToGen}
             {chrInfo}

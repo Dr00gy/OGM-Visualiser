@@ -3,32 +3,6 @@ export interface ChromosomeInfo {
   ref_len: number;
 }
 
-export interface MatchedRecord {
-  file_index: number;
-  ref_contig_id: number;
-  qry_start_pos: number;
-  qry_end_pos: number;
-  ref_start_pos: number;
-  ref_end_pos: number;
-  orientation: string;
-  confidence: number;
-  ref_len: number;
-}
-
-export interface BackendMatch {
-  qry_contig_id: number;
-  file_indices: number[];
-  records: MatchedRecord[];
-}
-
-export interface RecordChunk {
-  qry_contig_id: number;
-  file_indices: number[];
-  records: MatchedRecord[];
-  chunk_index: number;
-  total_chunks: number;
-}
-
 export interface ProgressFrame {
   total_matches: number;
   total_records: number;
@@ -93,27 +67,20 @@ class ByteReader {
     this.pos += 8;
     return v;
   }
-
-  remaining(): number { return this.data.length - this.pos; }
-  getPos(): number    { return this.pos; }
-}
-
-function decChrInfoVec(rd: ByteReader): ChromosomeInfo[] {
-  const len = Number(rd.readU64());
-  const out: ChromosomeInfo[] = [];
-  for (let i = 0; i < len; i++) {
-    const ref_contig_id = rd.readU8();
-    const ref_len = rd.readF64();
-    out.push({ ref_contig_id, ref_len });
-  }
-  return out;
 }
 
 function decChrInfoOuter(rd: ByteReader): ChromosomeInfo[][] {
   const n = Number(rd.readU64());
   const out: ChromosomeInfo[][] = [];
   for (let i = 0; i < n; i++) {
-    out.push(decChrInfoVec(rd));
+    const len = Number(rd.readU64());
+    const inner: ChromosomeInfo[] = [];
+    for (let j = 0; j < len; j++) {
+      const ref_contig_id = rd.readU8();
+      const ref_len = rd.readF64();
+      inner.push({ ref_contig_id, ref_len });
+    }
+    out.push(inner);
   }
   return out;
 }
@@ -121,25 +88,8 @@ function decChrInfoOuter(rd: ByteReader): ChromosomeInfo[][] {
 function decU64Vec(rd: ByteReader): number[] {
   const n = Number(rd.readU64());
   const out: number[] = [];
-  for (let i = 0; i < n; i++) {
-    out.push(Number(rd.readU64()));
-  }
+  for (let i = 0; i < n; i++) out.push(Number(rd.readU64()));
   return out;
-}
-
-function decProgress(rd: ByteReader): ProgressFrame {
-  const total_matches      = Number(rd.readU64());
-  const total_records      = Number(rd.readU64());
-  const per_genome_records = decU64Vec(rd);
-  return { total_matches, total_records, per_genome_records };
-}
-
-function decComplete(rd: ByteReader): CompleteFrame {
-  const total_matches             = Number(rd.readU64());
-  const total_records             = Number(rd.readU64());
-  const per_genome_records        = decU64Vec(rd);
-  const distinct_sequence_count   = Number(rd.readU64());
-  return { total_matches, total_records, per_genome_records, distinct_sequence_count };
 }
 
 function decStreamFrame(bytes: Uint8Array): StreamFrame {
@@ -147,30 +97,37 @@ function decStreamFrame(bytes: Uint8Array): StreamFrame {
   const variant = rd.readU32();
 
   switch (variant) {
-    case 0: {
-      const chromosomeInfo = decChrInfoOuter(rd);
-      return { type: 'chromosomeInfo', chromosomeInfo };
-    }
-    case 1: {
-      const progress = decProgress(rd);
-      return { type: 'progress', progress };
-    }
-    case 2: {
-      const complete = decComplete(rd);
-      return { type: 'complete', complete };
-    }
+    case 0:
+      return { type: 'chromosomeInfo', chromosomeInfo: decChrInfoOuter(rd) };
+    case 1:
+      return {
+        type: 'progress',
+        progress: {
+          total_matches:      Number(rd.readU64()),
+          total_records:      Number(rd.readU64()),
+          per_genome_records: decU64Vec(rd),
+        },
+      };
+    case 2:
+      return {
+        type: 'complete',
+        complete: {
+          total_matches:           Number(rd.readU64()),
+          total_records:           Number(rd.readU64()),
+          per_genome_records:      decU64Vec(rd),
+          distinct_sequence_count: Number(rd.readU64()),
+        },
+      };
     default:
       throw new Error(`Unknown StreamFrame variant index: ${variant}`);
   }
 }
 
 export async function* processMatchStream(
-  resp: Response
+  resp: Response,
 ): AsyncGenerator<StreamFrame> {
   const rd = resp.body?.getReader();
-  if (!rd) {
-    throw new Error('No response body available');
-  }
+  if (!rd) throw new Error('No response body available');
 
   let buf = new Uint8Array(1 << 14); // 16 KiB initial
   let readPos = 0;
@@ -186,9 +143,7 @@ export async function* processMatchStream(
       if (writePos + extra <= buf.length) return;
     }
     let next = buf.length;
-    while (next < writePos + extra) {
-      next = Math.max(next * 2, next + extra);
-    }
+    while (next < writePos + extra) next = Math.max(next * 2, next + extra);
     const grown = new Uint8Array(next);
     grown.set(buf.subarray(0, writePos));
     buf = grown;
@@ -199,9 +154,7 @@ export async function* processMatchStream(
       const { done, value } = await rd.read();
       if (done) {
         const left = writePos - readPos;
-        if (left > 0) {
-          console.warn(`Leftover bytes: ${left}`);
-        }
+        if (left > 0) console.warn(`Leftover bytes: ${left}`);
         break;
       }
 
@@ -219,9 +172,7 @@ export async function* processMatchStream(
         if (len < 0 || len > 10_000_000) {
           console.warn(`Suspicious frame length: ${len}`);
         }
-        if (writePos - readPos < 4 + len) {
-          break;
-        }
+        if (writePos - readPos < 4 + len) break;
 
         const msgBytes = buf.subarray(readPos + 4, readPos + 4 + len);
         readPos += 4 + len;
@@ -245,10 +196,3 @@ export async function* processMatchStream(
     rd.releaseLock();
   }
 }
-
-export const __testUtils = {
-  decStreamFrame,
-  decChrInfoOuter,
-  decProgress,
-  decComplete,
-};

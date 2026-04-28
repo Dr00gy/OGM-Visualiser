@@ -22,13 +22,6 @@ export interface MetaResponse {
   total_records: number;
 }
 
-export interface MatchEntry {
-  qry_contig_id: number;
-  records: MatchedRecordWire[];
-  total_record_count: number;
-  records_truncated: boolean;
-}
-
 export interface MatchedRecordWire {
   file_index: number;
   ref_contig_id: number;
@@ -39,6 +32,13 @@ export interface MatchedRecordWire {
   orientation: string;
   confidence: number;
   ref_len: number;
+}
+
+export interface MatchEntry {
+  qry_contig_id: number;
+  records: MatchedRecordWire[];
+  total_record_count: number;
+  records_truncated: boolean;
 }
 
 export interface SeqsPage {
@@ -56,27 +56,23 @@ export type SearchType = 'sequence' | 'chromosome' | 'confidence';
 const BASE = 'http://localhost:8080';
 
 export class QueryError extends Error {
-  constructor(
-    public status: number,
-    public statusText: string,
-    msg?: string,
-  ) {
+  constructor(public status: number, public statusText: string, msg?: string) {
     super(msg ?? `${status} ${statusText}`);
     this.name = 'QueryError';
   }
 }
 
+function isAbort(err: unknown): boolean {
+  return err instanceof DOMException && err.name === 'AbortError';
+}
+
 async function fetchJSON<T>(url: string, signal?: AbortSignal): Promise<T | undefined> {
   try {
     const resp = await fetch(url, { signal });
-    if (!resp.ok) {
-      throw new QueryError(resp.status, resp.statusText);
-    }
+    if (!resp.ok) throw new QueryError(resp.status, resp.statusText);
     return (await resp.json()) as T;
   } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
-      return undefined;
-    }
+    if (isAbort(err)) return undefined;
     throw err;
   }
 }
@@ -84,27 +80,17 @@ async function fetchJSON<T>(url: string, signal?: AbortSignal): Promise<T | unde
 async function fetchBincode(url: string, signal?: AbortSignal): Promise<Uint8Array | undefined> {
   try {
     const resp = await fetch(url, { signal });
-    if (!resp.ok) {
-      throw new QueryError(resp.status, resp.statusText);
-    }
-    const buf = await resp.arrayBuffer();
-    const bytes = new Uint8Array(buf);
-    if (bytes.length < 4) {
-      throw new QueryError(500, 'Malformed bincode response (too short)');
-    }
+    if (!resp.ok) throw new QueryError(resp.status, resp.statusText);
+    const bytes = new Uint8Array(await resp.arrayBuffer());
+    if (bytes.length < 4) throw new QueryError(500, 'Malformed bincode response (too short)');
     const bodyLen =
-      bytes[0] |
-      (bytes[1] << 8) |
-      (bytes[2] << 16) |
-      (bytes[3] << 24);
+      bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24);
     if (bodyLen + 4 !== bytes.length) {
       console.warn(`bincode body length ${bodyLen} + 4 header != total ${bytes.length}`);
     }
     return bytes.subarray(4, 4 + bodyLen);
   } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
-      return undefined;
-    }
+    if (isAbort(err)) return undefined;
     throw err;
   }
 }
@@ -129,42 +115,32 @@ export function fetchMeta(
   return fetchJSON<MetaResponse>(`${BASE}/api/session/${sessId}/meta`, signal);
 }
 
-export function fetchSeqs(
-  sessId: string,
-  opts: {
-    q?: string;
-    searchType?: SearchType;
-    page?: number;
-    perPage?: number;
-    signal?: AbortSignal;
-  } = {},
-): Promise<SeqsPage | undefined> {
-  const url = `${BASE}/api/session/${sessId}/sequences${qs({
+interface PageOpts {
+  q?: string;
+  searchType?: SearchType;
+  page?: number;
+  perPage?: number;
+  signal?: AbortSignal;
+}
+
+function pageQs(opts: PageOpts): string {
+  return qs({
     q: opts.q,
     search_type: opts.searchType,
     page: opts.page,
     per_page: opts.perPage,
-  })}`;
-  return fetchJSON<SeqsPage>(url, opts.signal);
+  });
+}
+
+export function fetchSeqs(sessId: string, opts: PageOpts = {}): Promise<SeqsPage | undefined> {
+  return fetchJSON<SeqsPage>(`${BASE}/api/session/${sessId}/sequences${pageQs(opts)}`, opts.signal);
 }
 
 export function fetchMatchesPage(
   sessId: string,
-  opts: {
-    q?: string;
-    searchType?: SearchType;
-    page?: number;
-    perPage?: number;
-    signal?: AbortSignal;
-  } = {},
+  opts: PageOpts = {},
 ): Promise<MatchesPage | undefined> {
-  const url = `${BASE}/api/session/${sessId}/matches${qs({
-    q: opts.q,
-    search_type: opts.searchType,
-    page: opts.page,
-    per_page: opts.perPage,
-  })}`;
-  return fetchJSON<MatchesPage>(url, opts.signal);
+  return fetchJSON<MatchesPage>(`${BASE}/api/session/${sessId}/matches${pageQs(opts)}`, opts.signal);
 }
 
 export interface WireFlow {
@@ -202,83 +178,59 @@ export async function fetchFlows(
     limit: opts.limit,
   })}`;
   const bytes = await fetchBincode(url, opts.signal);
-  if (!bytes) return undefined;
-  return decFlows(bytes);
+  return bytes ? decFlows(bytes) : undefined;
 }
 
 /**
- * bincode layout:
- *   [u64 LE vec length]
- *   then for each element:
- *     qry_contig_id     u32
- *     from_genome       u32
- *     from_chromosome   u8
- *     from_orientation  char (1..4 bytes UTF-8)
- *     from_confidence   f64
- *     to_genome         u32
- *     to_chromosome     u8
- *     to_orientation    char
- *     to_confidence     f64
+ * bincode layout: u64 LE length, then per element:
+ *   qry_contig_id     u32
+ *   from_genome       u32
+ *   from_chromosome   u8
+ *   from_orientation  char (1..4 bytes UTF-8; ASCII in practice)
+ *   from_confidence   f64
+ *   to_genome         u32
+ *   to_chromosome     u8
+ *   to_orientation    char
+ *   to_confidence     f64
  */
 function decFlows(bytes: Uint8Array): WireFlow[] {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let pos = 0;
-
-  const n = Number(view.getBigUint64(pos, true));
-  pos += 8;
-
+  const n = Number(view.getBigUint64(pos, true)); pos += 8;
   const out: WireFlow[] = new Array(n);
+
   for (let i = 0; i < n; i++) {
     const qry_contig_id = view.getUint32(pos, true); pos += 4;
     const from_genome = view.getUint32(pos, true); pos += 4;
     const from_chromosome = view.getUint8(pos); pos += 1;
-
-    let from_orientation: string;
-    const b0 = view.getUint8(pos); pos += 1;
-    if ((b0 & 0x80) === 0) {
-      from_orientation = String.fromCharCode(b0);
-    } else {
-      pos += multiByteSkip(b0);
-      from_orientation = '?';
-    }
-
+    const from_orientation = readChar(view, pos); pos += charLen(view.getUint8(pos));
     const from_confidence = view.getFloat64(pos, true); pos += 8;
 
     const to_genome = view.getUint32(pos, true); pos += 4;
     const to_chromosome = view.getUint8(pos); pos += 1;
-
-    let to_orientation: string;
-    const b1 = view.getUint8(pos); pos += 1;
-    if ((b1 & 0x80) === 0) {
-      to_orientation = String.fromCharCode(b1);
-    } else {
-      pos += multiByteSkip(b1);
-      to_orientation = '?';
-    }
-
+    const to_orientation = readChar(view, pos); pos += charLen(view.getUint8(pos));
     const to_confidence = view.getFloat64(pos, true); pos += 8;
 
     out[i] = {
       qry_contig_id,
-      from_genome,
-      from_chromosome,
-      from_orientation,
-      from_confidence,
-      to_genome,
-      to_chromosome,
-      to_orientation,
-      to_confidence,
+      from_genome, from_chromosome, from_orientation, from_confidence,
+      to_genome, to_chromosome, to_orientation, to_confidence,
     };
   }
-
   return out;
 }
 
-function multiByteSkip(lead: number): number {
-  if ((lead & 0xE0) === 0xC0) return 1;
-  if ((lead & 0xF0) === 0xE0) return 2;
-  if ((lead & 0xF8) === 0xF0) return 3;
-  return 0;
+function readChar(view: DataView, pos: number): string {
+  const b = view.getUint8(pos);
+  return (b & 0x80) === 0 ? String.fromCharCode(b) : '?';
+}
+
+function charLen(lead: number): number {
+  if ((lead & 0x80) === 0) return 1;
+  if ((lead & 0xE0) === 0xC0) return 2;
+  if ((lead & 0xF0) === 0xE0) return 3;
+  if ((lead & 0xF8) === 0xF0) return 4;
+  return 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -306,12 +258,7 @@ export interface ChrRecsResponse {
 
 export async function fetchChrRecs(
   sessId: string,
-  opts: {
-    genomes?: number[];
-    chr: number;
-    qry?: number;
-    signal?: AbortSignal;
-  },
+  opts: { genomes?: number[]; chr: number; qry?: number; signal?: AbortSignal },
 ): Promise<ChrRecsResponse | undefined> {
   const url = `${BASE}/api/session/${sessId}/chromosome-records${qs({
     genomes: opts.genomes && opts.genomes.length > 0 ? opts.genomes.join(',') : undefined,
@@ -319,8 +266,7 @@ export async function fetchChrRecs(
     qry: opts.qry,
   })}`;
   const bytes = await fetchBincode(url, opts.signal);
-  if (!bytes) return undefined;
-  return decChrRecs(bytes);
+  return bytes ? decChrRecs(bytes) : undefined;
 }
 
 export interface SeqLocation {
@@ -335,13 +281,9 @@ export interface SeqLocationsResp {
   locations: SeqLocation[];
 }
 
-export async function fetchSeqLocations(
+export function fetchSeqLocations(
   sessId: string,
-  opts: {
-    qry: number;
-    genomes?: number[];
-    signal?: AbortSignal;
-  },
+  opts: { qry: number; genomes?: number[]; signal?: AbortSignal },
 ): Promise<SeqLocationsResp | undefined> {
   const url = `${BASE}/api/session/${sessId}/sequence-locations${qs({
     qry: opts.qry,
@@ -352,21 +294,10 @@ export async function fetchSeqLocations(
 
 /**
  * Wire layout:
- *   chromosome          u8
- *   chromosome_ref_len  f64
- *   records_len         u64 LE
- *   records: each record has fields in declaration order:
- *     qry_contig_id   u32
- *     file_index      u32
- *     genome_index    u32
- *     ref_contig_id   u8
- *     qry_start_pos   f64
- *     qry_end_pos     f64
- *     ref_start_pos   f64
- *     ref_end_pos     f64
- *     orientation     char (1..4 UTF-8 bytes; ASCII in practice)
- *     confidence      f64
- *     ref_len         f64
+ *   chromosome u8, chromosome_ref_len f64, records_len u64 LE,
+ *   records: qry_contig_id u32, file_index u32, genome_index u32,
+ *            ref_contig_id u8, qry_start/end f64, ref_start/end f64,
+ *            orientation char, confidence f64, ref_len f64.
  */
 function decChrRecs(bytes: Uint8Array): ChrRecsResponse {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -386,31 +317,14 @@ function decChrRecs(bytes: Uint8Array): ChrRecsResponse {
     const qry_end_pos   = view.getFloat64(pos, true); pos += 8;
     const ref_start_pos = view.getFloat64(pos, true); pos += 8;
     const ref_end_pos   = view.getFloat64(pos, true); pos += 8;
-
-    let orientation: string;
-    const b0 = view.getUint8(pos); pos += 1;
-    if ((b0 & 0x80) === 0) {
-      orientation = String.fromCharCode(b0);
-    } else {
-      pos += multiByteSkip(b0);
-      orientation = '?';
-    }
-
-    const confidence = view.getFloat64(pos, true); pos += 8;
-    const ref_len    = view.getFloat64(pos, true); pos += 8;
+    const orientation   = readChar(view, pos); pos += charLen(view.getUint8(pos));
+    const confidence    = view.getFloat64(pos, true); pos += 8;
+    const ref_len       = view.getFloat64(pos, true); pos += 8;
 
     records[i] = {
-      qry_contig_id,
-      file_index,
-      genome_index,
-      ref_contig_id,
-      qry_start_pos,
-      qry_end_pos,
-      ref_start_pos,
-      ref_end_pos,
-      orientation,
-      confidence,
-      ref_len,
+      qry_contig_id, file_index, genome_index, ref_contig_id,
+      qry_start_pos, qry_end_pos, ref_start_pos, ref_end_pos,
+      orientation, confidence, ref_len,
     };
   }
 

@@ -13,16 +13,16 @@
     missingRefineFinal: boolean;
   }
 
-  let zones: GenZone[] = [
-    { seqFiles: [], refineFinalFile: null, dirName: '', dragging: false, dragCnt: 0, missingRefineFinal: false },
-    { seqFiles: [], refineFinalFile: null, dirName: '', dragging: false, dragCnt: 0, missingRefineFinal: false },
-  ];
+  const mkZone = (): GenZone => ({
+    seqFiles: [], refineFinalFile: null, dirName: '',
+    dragging: false, dragCnt: 0, missingRefineFinal: false,
+  });
+
+  let zones: GenZone[] = [mkZone(), mkZone()];
   let fileInputs: HTMLInputElement[] = [];
 
   function addZone() {
-    if (zones.length < 3) {
-      zones = [...zones, { seqFiles: [], refineFinalFile: null, dirName: '', dragging: false, dragCnt: 0, missingRefineFinal: false }];
-    }
+    if (zones.length < 3) zones = [...zones, mkZone()];
   }
 
   function removeZone(idx: number) {
@@ -31,20 +31,17 @@
 
   async function walkDir(
     dir: FileSystemDirectoryEntry,
-    segments: string[]
+    segments: string[],
   ): Promise<FileSystemDirectoryEntry | null> {
     if (segments.length === 0) return dir;
     const [first, ...rest] = segments;
     return new Promise((resolve) => {
       dir.createReader().readEntries((entries) => {
         const match = entries.find(
-          (e) => e.isDirectory && e.name === first
+          (e) => e.isDirectory && e.name === first,
         ) as FileSystemDirectoryEntry | undefined;
-        if (match) {
-          walkDir(match, rest).then(resolve);
-        } else {
-          resolve(null);
-        }
+        if (match) walkDir(match, rest).then(resolve);
+        else resolve(null);
       });
     });
   }
@@ -54,13 +51,13 @@
     const reader = dir.createReader();
     while (true) {
       const entries: FileSystemEntry[] = await new Promise((resolve, reject) =>
-        reader.readEntries(resolve, reject)
+        reader.readEntries(resolve, reject),
       );
       if (entries.length === 0) break;
       for (const entry of entries) {
         if (entry.isFile && entry.name.endsWith('.xmap')) {
           const file = await new Promise<File>((resolve, reject) =>
-            (entry as FileSystemFileEntry).file(resolve, reject)
+            (entry as FileSystemFileEntry).file(resolve, reject),
           );
           files.push(file);
         }
@@ -74,22 +71,24 @@
     refineFinalFile: File | null;
   }> {
     const seqFiles: File[] = [];
-    let refineFinalFile: File | null = null;
-
     const seqDir = await walkDir(dir, CONTIG_PATH);
     if (seqDir) {
       const allFiles = await collectXmaps(seqDir);
       for (const f of allFiles) {
-        if (f.name !== REFINEFINAL_NAME) {
-          seqFiles.push(f);
-        }
+        if (f.name !== REFINEFINAL_NAME) seqFiles.push(f);
       }
     }
-
     const rootFiles = await collectXmaps(dir);
-    refineFinalFile = rootFiles.find(f => f.name === REFINEFINAL_NAME) ?? null;
-
+    const refineFinalFile = rootFiles.find(f => f.name === REFINEFINAL_NAME) ?? null;
     return { seqFiles, refineFinalFile };
+  }
+
+  function setZone(idx: number, seqFiles: File[], refineFinalFile: File | null, dirName: string) {
+    zones[idx].seqFiles = seqFiles;
+    zones[idx].refineFinalFile = refineFinalFile;
+    zones[idx].dirName = dirName;
+    zones[idx].missingRefineFinal = refineFinalFile === null && seqFiles.length > 0;
+    zones = [...zones];
   }
 
   function onChange(e: Event, zoneIdx: number) {
@@ -97,14 +96,12 @@
     const fileList = input.files;
     if (!fileList || fileList.length === 0) return;
 
-    const allFiles = Array.from(fileList);
     const seqFiles: File[] = [];
     let refineFinalFile: File | null = null;
     let dirName = '';
-
     const seqPathStr = CONTIG_PATH.join('/');
 
-    for (const f of allFiles) {
+    for (const f of Array.from(fileList)) {
       const rel = (f as any).webkitRelativePath as string;
       if (!dirName) dirName = rel.split('/')[0];
       const normalized = rel.replace(/\\/g, '/');
@@ -117,11 +114,7 @@
       }
     }
 
-    zones[zoneIdx].seqFiles = seqFiles;
-    zones[zoneIdx].refineFinalFile = refineFinalFile;
-    zones[zoneIdx].dirName = dirName;
-    zones[zoneIdx].missingRefineFinal = refineFinalFile === null && seqFiles.length > 0;
-    zones = [...zones];
+    setZone(zoneIdx, seqFiles, refineFinalFile, dirName);
     input.value = '';
   }
 
@@ -139,14 +132,10 @@
       const entry = items[i].webkitGetAsEntry?.();
       if (entry?.isDirectory) {
         const { seqFiles, refineFinalFile } = await collectFromDir(
-          entry as FileSystemDirectoryEntry
+          entry as FileSystemDirectoryEntry,
         );
         if (seqFiles.length > 0 || refineFinalFile) {
-          zones[zoneIdx].seqFiles = seqFiles;
-          zones[zoneIdx].refineFinalFile = refineFinalFile;
-          zones[zoneIdx].dirName = entry.name;
-          zones[zoneIdx].missingRefineFinal = refineFinalFile === null && seqFiles.length > 0;
-          zones = [...zones];
+          setZone(zoneIdx, seqFiles, refineFinalFile, entry.name);
           break;
         }
       }

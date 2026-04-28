@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use crate::xmap::{
     XmapCache, XmapFileSet, parse_xmap_disk, parse_refinefinal,
-    hash_file, ChromosomeInfo, RefineFinalRecord, MatchedRecord,
+    hash_file, ChromosomeInfo, RefineFinalRecord,
 };
 use crate::store::MatchStore;
 
@@ -45,11 +45,12 @@ pub struct CompleteFrame {
     pub distinct_sequence_count: u64,
 }
 
-const MAX_RECORDS_PER_CHUNK: usize = 500;
 const MAX_GENOMES: usize = 3;
 const MAX_FILES_PER_GENOME: usize = 1000;
 const SESSION_TTL: Duration = Duration::from_secs(3600);
 const JANITOR_INTERVAL: Duration = Duration::from_secs(300);
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(500);
+const PROGRESS_EVERY_N_MATCHES: u64 = 1000;
 
 pub struct Session {
     staging_dir: PathBuf,
@@ -74,9 +75,7 @@ impl Session {
         }
     }
 
-    fn touch(&mut self) {
-        self.last_touched = Instant::now();
-    }
+    fn touch(&mut self) { self.last_touched = Instant::now(); }
 }
 
 impl Drop for Session {
@@ -138,9 +137,7 @@ pub async fn create_session(
     state.sessions.insert(id, Session::new(staging_dir));
     eprintln!("[api] [session {id}] created");
 
-    Ok(Json(CreateSessionResponse {
-        session_id: id.to_string(),
-    }))
+    Ok(Json(CreateSessionResponse { session_id: id.to_string() }))
 }
 
 pub async fn delete_session(
@@ -195,13 +192,10 @@ pub async fn upload_file(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let staging_dir = {
-        let session = state.sessions.get(&uuid).ok_or_else(|| {
-            eprintln!("[api] !!! upload: session {uuid} disappeared mid-upload");
-            StatusCode::NOT_FOUND
-        })?;
-        session.staging_dir.clone()
-    };
+    let staging_dir = state.sessions.get(&uuid).ok_or_else(|| {
+        eprintln!("[api] !!! upload: session {uuid} disappeared mid-upload");
+        StatusCode::NOT_FOUND
+    })?.staging_dir.clone();
 
     let file_uuid = Uuid::new_v4();
     let temp_path = staging_dir.join(format!("{file_uuid}.xmap"));
@@ -244,28 +238,26 @@ pub async fn upload_file(
         upload_start.elapsed()
     );
 
-    {
-        let mut session = state.sessions.get_mut(&uuid).ok_or_else(|| {
-            eprintln!(
-                "[api] !!! upload: session {uuid} evicted after file write; file orphaned at {temp_path:?}"
-            );
-            let _ = std::fs::remove_file(&temp_path);
-            StatusCode::NOT_FOUND
-        })?;
+    let mut session = state.sessions.get_mut(&uuid).ok_or_else(|| {
+        eprintln!(
+            "[api] !!! upload: session {uuid} evicted after file write; file orphaned at {temp_path:?}"
+        );
+        let _ = std::fs::remove_file(&temp_path);
+        StatusCode::NOT_FOUND
+    })?;
 
-        if is_refinefinal {
-            session.genome_refinefinal[genome_index] = Some(temp_path);
-        } else {
-            if session.genome_sequence_files[genome_index].len() >= MAX_FILES_PER_GENOME {
-                eprintln!(
-                    "[api] !!! upload: too many sequence files for genome {genome_index} in session {uuid}"
-                );
-                return Err(StatusCode::BAD_REQUEST);
-            }
-            session.genome_sequence_files[genome_index].push(temp_path);
+    if is_refinefinal {
+        session.genome_refinefinal[genome_index] = Some(temp_path);
+    } else {
+        if session.genome_sequence_files[genome_index].len() >= MAX_FILES_PER_GENOME {
+            eprintln!(
+                "[api] !!! upload: too many sequence files for genome {genome_index} in session {uuid}"
+            );
+            return Err(StatusCode::BAD_REQUEST);
         }
-        session.touch();
+        session.genome_sequence_files[genome_index].push(temp_path);
     }
+    session.touch();
 
     Ok(StatusCode::OK)
 }
@@ -301,7 +293,6 @@ pub async fn stream_matches(
         entry.touch();
         (sequences, refinefinals, store)
     };
-    eprintln!("[api] [session {uuid}] files extracted for match phase");
 
     let populated_genomes: Vec<usize> = genome_sequence_files
         .iter()
@@ -311,7 +302,7 @@ pub async fn stream_matches(
         .collect();
 
     eprintln!(
-        "[api] [phase2] populated genomes: {:?} (sequence counts: {:?})",
+        "[api] populated genomes: {:?} (sequence counts: {:?})",
         populated_genomes,
         genome_sequence_files.iter().map(|v| v.len()).collect::<Vec<_>>()
     );
@@ -328,20 +319,14 @@ pub async fn stream_matches(
         }
     }
 
-    let phase3_start = Instant::now();
-    eprintln!("[api] [phase3] parsing refineFinal files for {} genomes", populated_genomes.len());
-
-    let mut refinefinal_lookups: Vec<Arc<std::collections::HashMap<u32, Vec<RefineFinalRecord>>>> = Vec::new();
+    // Parse refineFinals.
+    let mut refinefinal_lookups = Vec::new();
     let mut chromosome_info_per_genome: Vec<Vec<ChromosomeInfo>> = Vec::new();
 
     for &gi in &populated_genomes {
         let rf_path = genome_refinefinal[gi].take().unwrap();
-        let rf_path_clone = rf_path.clone();
-        let rf_start = Instant::now();
-        eprintln!("[api] [phase3] genome {gi}: parsing refineFinal at {rf_path_clone:?}");
-
         let (lookup, chr_lengths) = tokio::task::spawn_blocking(move || {
-            parse_refinefinal(&rf_path_clone)
+            parse_refinefinal(&rf_path)
         })
             .await
             .map_err(|e| {
@@ -353,13 +338,6 @@ pub async fn stream_matches(
                 StatusCode::BAD_REQUEST
             })?;
 
-        eprintln!(
-            "[api] [phase3] genome {gi}: refineFinal parsed in {:?} ({} qry entries, {} chromosomes)",
-            rf_start.elapsed(),
-            lookup.len(),
-            chr_lengths.len()
-        );
-
         let chr_info: Vec<ChromosomeInfo> = chr_lengths
             .into_iter()
             .map(|(ref_contig_id, ref_len)| ChromosomeInfo { ref_contig_id, ref_len })
@@ -369,34 +347,21 @@ pub async fn stream_matches(
         refinefinal_lookups.push(Arc::new(lookup));
     }
 
-    eprintln!("[api] [phase3] DONE in {:?}", phase3_start.elapsed());
-
-    let phase4_start = Instant::now();
+    // Parse sequence (xmap) files; cache by hash.
     let total_sequence_files: usize = populated_genomes
         .iter()
         .map(|&gi| genome_sequence_files[gi].len())
         .sum();
-    eprintln!("[api] [phase4] parsing {total_sequence_files} sequence files");
+    eprintln!("[api] parsing {total_sequence_files} sequence files");
 
-    let mut all_file_records = Vec::new();
-    let mut all_file_hashes  = Vec::new();
+    let mut all_file_qrys = Vec::new();
     let mut file_to_genome: Vec<usize> = Vec::new();
-    let mut flat_idx = 0usize;
 
     for (genome_order_idx, &gi) in populated_genomes.iter().enumerate() {
-        let files = &genome_sequence_files[gi];
-
-        for temp_path in files {
-            let file_start = Instant::now();
-            eprintln!(
-                "[api] [phase4] file {}/{} (genome {gi}, flat_idx {flat_idx}): hashing {temp_path:?}",
-                flat_idx + 1,
-                total_sequence_files
-            );
-
+        for temp_path in &genome_sequence_files[gi] {
             let hash = {
-                let path_clone  = temp_path.clone();
-                tokio::task::spawn_blocking(move || hash_file(&path_clone))
+                let path = temp_path.clone();
+                tokio::task::spawn_blocking(move || hash_file(&path))
                     .await
                     .map_err(|e| {
                         eprintln!("[api] !!! hash join error: {e:?}");
@@ -407,100 +372,35 @@ pub async fn stream_matches(
                         StatusCode::INTERNAL_SERVER_ERROR
                     })?
             };
-            all_file_hashes.push(hash);
-            eprintln!(
-                "[api] [phase4] file {}/{}: hashed (hash={hash}) in {:?}",
-                flat_idx + 1,
-                total_sequence_files,
-                file_start.elapsed()
-            );
 
-            let parse_start = Instant::now();
-            let records =
-                if let Some(r) = state.cache.parsed_files.get(&hash) {
-                    eprintln!(
-                        "[api] [phase4] file {}/{}: CACHE HIT",
-                        flat_idx + 1,
-                        total_sequence_files
-                    );
-                    Arc::clone(r.value())
-                } else {
-                    eprintln!(
-                        "[api] [phase4] file {}/{}: CACHE MISS, parsing...",
-                        flat_idx + 1,
-                        total_sequence_files
-                    );
-                    let cache_clone = Arc::clone(&state.cache);
-                    let path_clone  = temp_path.clone();
-                    let (recs, _chr) = tokio::task::spawn_blocking(move || {
-                        parse_xmap_disk(&path_clone, hash, &cache_clone)
-                    })
-                        .await
-                        .map_err(|e| {
-                            eprintln!("[api] !!! parse join error: {e:?}");
-                            StatusCode::INTERNAL_SERVER_ERROR
-                        })?
-                        .map_err(|e| {
-                            eprintln!("[api] !!! parse_xmap_disk error: {e:?}");
-                            StatusCode::BAD_REQUEST
-                        })?;
-                    recs
-                };
+            let qrys = if let Some(r) = state.cache.parsed_files.get(&hash) {
+                Arc::clone(r.value())
+            } else {
+                let cache = Arc::clone(&state.cache);
+                let path = temp_path.clone();
+                tokio::task::spawn_blocking(move || parse_xmap_disk(&path, hash, &cache))
+                    .await
+                    .map_err(|e| {
+                        eprintln!("[api] !!! parse join error: {e:?}");
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    })?
+                    .map_err(|e| {
+                        eprintln!("[api] !!! parse_xmap_disk error: {e:?}");
+                        StatusCode::BAD_REQUEST
+                    })?
+            };
 
-            eprintln!(
-                "[api] [phase4] file {}/{}: parsed in {:?} ({} records)",
-                flat_idx + 1,
-                total_sequence_files,
-                parse_start.elapsed(),
-                records.len()
-            );
-
-            all_file_records.push(records);
+            all_file_qrys.push(qrys);
             file_to_genome.push(genome_order_idx);
-            flat_idx += 1;
         }
     }
 
-    eprintln!("[api] [phase4] DONE in {:?}", phase4_start.elapsed());
-
-    let phase5_start = Instant::now();
-    eprintln!("[api] [phase5] warming indices for {} files", all_file_records.len());
-
-    let mut all_file_indices = Vec::with_capacity(all_file_records.len());
-    for (idx, records) in all_file_records.iter().enumerate() {
-        let idx_start = Instant::now();
-        let hash          = all_file_hashes[idx];
-        let cache_clone   = Arc::clone(&state.cache);
-        let records_clone = Arc::clone(records);
-        let index = tokio::task::spawn_blocking(move || {
-            cache_clone.get_or_build_index(hash, &records_clone)
-        })
-            .await
-            .map_err(|e| {
-                eprintln!("[api] !!! index join error: {e:?}");
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?;
-        all_file_indices.push(index);
-        eprintln!(
-            "[api] [phase5] index {}/{} built in {:?}",
-            idx + 1,
-            all_file_records.len(),
-            idx_start.elapsed()
-        );
-    }
-
-    eprintln!("[api] [phase5] DONE in {:?}", phase5_start.elapsed());
-
-    eprintln!("[api] [phase6] assembling XmapFileSet");
-    let fileset_start = Instant::now();
     let file_to_genome_for_session = file_to_genome.clone();
     let fileset = Arc::new(XmapFileSet::new(
-        all_file_records.into_boxed_slice(),
-        all_file_indices.into_boxed_slice(),
+        all_file_qrys.into_boxed_slice(),
         file_to_genome.into_boxed_slice(),
         refinefinal_lookups.into_boxed_slice(),
     ));
-    eprintln!("[api] [phase6] XmapFileSet assembled in {:?}", fileset_start.elapsed());
 
     if let Some(mut entry) = state.sessions.get_mut(&uuid) {
         entry.file_to_genome = Some(file_to_genome_for_session);
@@ -509,20 +409,15 @@ pub async fn stream_matches(
 
     let (mut writer, reader) = tokio::io::duplex(1 << 20);
     eprintln!(
-        "[api] [phase6] total setup time before spawning stream task: {:?}",
+        "[api] setup time before spawning stream task: {:?}",
         req_start.elapsed()
     );
 
     let sessions_for_task = Arc::clone(&state.sessions);
-    let store_for_task    = Arc::clone(&store_arc);
+    let store_for_task = Arc::clone(&store_arc);
 
     tokio::spawn(async move {
         let stream_start = Instant::now();
-        eprintln!("[api] [stream {uuid}] task started");
-
-        const PROGRESS_INTERVAL: Duration = Duration::from_millis(500);
-        const PROGRESS_EVERY_N_MATCHES: u64 = 1000;
-
         let mut writer_alive = true;
 
         async fn send_frame(
@@ -539,17 +434,14 @@ pub async fn stream_matches(
             let len = (bytes.len() as u32).to_le_bytes();
             if writer.write_all(&len).await.is_err() { return false; }
             if writer.write_all(&bytes).await.is_err() { return false; }
-            if writer.flush().await.is_err() { return false; }
-            true
+            writer.flush().await.is_ok()
         }
 
-        // --- Frame 1: ChromosomeInfo ---
+        // Frame 1: ChromosomeInfo
         let chr_frame = StreamFrame::ChromosomeInfo(chromosome_info_per_genome);
         if !send_frame(&mut writer, &chr_frame).await {
             eprintln!("[api] [stream {uuid}] client disconnected before chromosome info frame");
             writer_alive = false;
-        } else {
-            eprintln!("[api] [stream {uuid}] chromosome info frame sent");
         }
 
         let file_to_genome_slice: Vec<usize> = sessions_for_task
@@ -557,26 +449,18 @@ pub async fn stream_matches(
             .and_then(|s| s.file_to_genome.clone())
             .unwrap_or_default();
 
-        let rx = crate::xmap::stream_matches_chunked(fileset, MAX_RECORDS_PER_CHUNK);
+        // Bridge crossbeam (sync producer) → tokio mpsc (async consumer).
+        let rx = crate::xmap::stream_matches(fileset);
         let (bridge_tx, mut bridge_rx) =
-            tokio::sync::mpsc::channel::<crate::xmap::RecordChunk>(256);
+            tokio::sync::mpsc::channel::<crate::xmap::XmapMatch>(256);
 
         tokio::task::spawn_blocking(move || {
-            while let Ok(chunk) = rx.recv() {
-                if bridge_tx.blocking_send(chunk).is_err() {
+            while let Ok(m) = rx.recv() {
+                if bridge_tx.blocking_send(m).is_err() {
                     break;
                 }
             }
         });
-
-        struct Partial {
-            records:        Vec<MatchedRecord>,
-            file_indices:   Vec<u32>,
-            chunks_seen:    usize,
-            chunks_expected: usize,
-        }
-        let mut partials: std::collections::HashMap<u32, Partial> =
-            std::collections::HashMap::new();
 
         let mut progress_ticker = tokio::time::interval(PROGRESS_INTERVAL);
         progress_ticker.tick().await; // skip immediate first tick
@@ -584,40 +468,13 @@ pub async fn stream_matches(
 
         loop {
             tokio::select! {
-                maybe_chunk = bridge_rx.recv() => {
-                    let Some(chunk) = maybe_chunk else { break; };
-
-                    let qry    = chunk.qry_contig_id;
-                    let total  = chunk.total_chunks as usize;
-                    let fi_vec: Vec<u32> =
-                        chunk.file_indices.iter().map(|v| *v as u32).collect();
-                    let records_vec: Vec<MatchedRecord> =
-                        chunk.records.into_vec();
-
-                    if total == 1 {
-                        store_for_task.push_match(
-                            qry, &fi_vec, &records_vec, &file_to_genome_slice);
-                    } else {
-                        let entry = partials.entry(qry).or_insert_with(|| Partial {
-                            records: Vec::new(),
-                            file_indices: Vec::new(),
-                            chunks_seen: 0,
-                            chunks_expected: total,
-                        });
-                        entry.records.extend(records_vec);
-                        for fi in &fi_vec {
-                            if !entry.file_indices.contains(fi) {
-                                entry.file_indices.push(*fi);
-                            }
-                        }
-                        entry.chunks_seen += 1;
-
-                        if entry.chunks_seen >= entry.chunks_expected {
-                            let done = partials.remove(&qry).unwrap();
-                            store_for_task.push_match(
-                                qry, &done.file_indices, &done.records, &file_to_genome_slice);
-                        }
-                    }
+                maybe_match = bridge_rx.recv() => {
+                    let Some(m) = maybe_match else { break; };
+                    store_for_task.push_match(
+                        m.qry_contig_id,
+                        &m.records,
+                        &file_to_genome_slice,
+                    );
 
                     let snap = store_for_task.snapshot();
                     if writer_alive
@@ -655,12 +512,6 @@ pub async fn stream_matches(
             }
         }
 
-        for (qry, p) in partials.drain() {
-            store_for_task.push_match(
-                qry, &p.file_indices, &p.records, &file_to_genome_slice);
-        }
-
-        // Builds derived aggregates
         let finalize_start = Instant::now();
         store_for_task.finalize(&file_to_genome_slice);
         eprintln!(
@@ -668,19 +519,6 @@ pub async fn stream_matches(
             finalize_start.elapsed()
         );
 
-        if writer_alive {
-            let snap = store_for_task.snapshot();
-            let pf = StreamFrame::Progress(ProgressFrame {
-                total_matches: snap.total_matches,
-                total_records: snap.total_records,
-                per_genome_records: snap.per_genome_records.clone(),
-            });
-            if !send_frame(&mut writer, &pf).await {
-                writer_alive = false;
-            }
-        }
-
-        // --- Final frame: Complete ---
         if writer_alive {
             let snap = store_for_task.snapshot();
             let distinct = store_for_task.distinct_sequence_count() as u64;
@@ -706,48 +544,31 @@ pub async fn stream_matches(
                         "[api] [stream {uuid}] warning: failed to remove staging dir {:?}: {e:?}",
                         old_dir
                     );
-                } else {
-                    eprintln!("[api] [stream {uuid}] staging dir removed");
                 }
             }
-        } else {
-            eprintln!("[api] [stream {uuid}] session vanished during ingest");
         }
 
         drop(writer);
-        drop(store_for_task);
-
-        let snap = sessions_for_task
-            .get(&uuid)
-            .map(|e| e.store.snapshot());
-        if let Some(snap) = snap {
-            eprintln!(
-                "[api] [stream {uuid}] DONE: {} matches / {} records ingested in {:?} (total request {:?})",
-                snap.total_matches,
-                snap.total_records,
-                stream_start.elapsed(),
-                req_start.elapsed()
-            );
-        }
+        let snap = store_for_task.snapshot();
+        eprintln!(
+            "[api] [stream {uuid}] DONE: {} matches / {} records in {:?} (total request {:?})",
+            snap.total_matches, snap.total_records,
+            stream_start.elapsed(), req_start.elapsed()
+        );
     });
-
-    let stream = ReaderStream::new(reader);
-    let body   = Body::from_stream(stream);
-
-    eprintln!("[api] <<< returning Response; handler done in {:?}", req_start.elapsed());
 
     Ok(Response::builder()
         .header("Content-Type", "application/octet-stream")
         .header("Cache-Control", "no-cache")
         .header("X-Content-Type-Options", "nosniff")
-        .body(body)
+        .body(Body::from_stream(ReaderStream::new(reader)))
         .unwrap())
 }
 
 /// Parse the multipart field name. Form is `g{gi}_r` for refineFinal or
 /// `g{gi}_s{si}` for sequence files. Returns `(genome_index, is_refinefinal)`.
 fn parse_field_name(field_name: &str) -> Option<(usize, bool)> {
-    let s          = field_name.strip_prefix('g')?;
+    let s = field_name.strip_prefix('g')?;
     let underscore = s.find('_')?;
     let genome_index: usize = s[..underscore].parse().ok()?;
     let suffix = &s[underscore + 1..];
@@ -755,11 +576,7 @@ fn parse_field_name(field_name: &str) -> Option<(usize, bool)> {
     if suffix == "r" {
         Some((genome_index, true))
     } else if let Some(rest) = suffix.strip_prefix('s') {
-        if rest.parse::<usize>().is_ok() {
-            Some((genome_index, false))
-        } else {
-            None
-        }
+        rest.parse::<usize>().ok().map(|_| (genome_index, false))
     } else {
         None
     }

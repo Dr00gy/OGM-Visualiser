@@ -16,10 +16,8 @@ const initSt: SearchState = {
   mtcQry: '',
   areaQry: '',
   ovType: 'sequence',
-  mtcType: 'sequence'
+  mtcType: 'sequence',
 };
 
 export const searchStore = writable<SearchState>(initSt);
-export function resetSearchStore() {
-  searchStore.set(initSt);
-}
+export function resetSearchStore() { searchStore.set(initSt); }

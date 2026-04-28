@@ -10,7 +10,6 @@ pub struct MatchStore {
 #[derive(Default)]
 pub struct MatchStoreInner {
     // Columnar storage, one entry per resolved record.
-    // Field names mirror the xmap headers.
     pub file_index:    Vec<u32>,
     pub ref_contig_id: Vec<u8>,
     pub qry_start_pos: Vec<f64>,
@@ -23,11 +22,6 @@ pub struct MatchStoreInner {
     pub ref_len:       Vec<f64>,
     pub qry_contig_id: Vec<u32>,
 
-    // Per-match metadata, one entry per match.
-    pub match_sequence_ids:   Vec<u32>,
-    pub match_file_indices:   Vec<Vec<u32>>,
-    pub match_record_counts:  Vec<u32>,
-
     /// qry_contig_id → row indices into the columns above.
     pub rows_by_sequence: HashMap<u32, Vec<u32>>,
     pub total_records: u64,
@@ -37,7 +31,6 @@ pub struct MatchStoreInner {
     pub max_confidence: f64,
     pub available_sequence_ids: Vec<u32>,
     pub aggregates: Vec<SequenceAggregate>,
-    pub aggregate_index: HashMap<u32, usize>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -58,25 +51,20 @@ pub struct ChromosomeCount {
 }
 
 impl MatchStore {
-    pub fn new() -> Self {
-        Self::default()
-    }
+    pub fn new() -> Self { Self::default() }
 
     pub fn push_match(
         &self,
         qry_contig_id: u32,
-        file_indices: &[u32],
         records: &[MatchedRecord],
         file_to_genome: &[usize],
     ) {
-        if records.is_empty() {
-            return;
-        }
+        if records.is_empty() { return; }
 
         let mut inner = self.inner.write().expect("MatchStore poisoned");
         let start_row = inner.file_index.len() as u32;
-
         let n = records.len();
+
         inner.file_index.reserve(n);
         inner.ref_contig_id.reserve(n);
         inner.qry_start_pos.reserve(n);
@@ -88,7 +76,7 @@ impl MatchStore {
         inner.ref_len.reserve(n);
         inner.qry_contig_id.reserve(n);
 
-        for r in records.iter() {
+        for r in records {
             inner.file_index.push(r.file_index as u32);
             inner.ref_contig_id.push(r.ref_contig_id);
             inner.qry_start_pos.push(r.qry_start_pos);
@@ -108,12 +96,10 @@ impl MatchStore {
         }
 
         let end_row = start_row + n as u32;
-        let bucket = inner.rows_by_sequence.entry(qry_contig_id).or_insert_with(Vec::new);
-        bucket.extend(start_row..end_row);
-
-        inner.match_sequence_ids.push(qry_contig_id);
-        inner.match_file_indices.push(file_indices.to_vec());
-        inner.match_record_counts.push(n as u32);
+        inner.rows_by_sequence
+            .entry(qry_contig_id)
+            .or_insert_with(Vec::new)
+            .extend(start_row..end_row);
 
         inner.total_records += n as u64;
         inner.total_matches += 1;
@@ -134,56 +120,39 @@ impl MatchStore {
 
     pub fn finalize(&self, file_to_genome: &[usize]) {
         let mut inner = self.inner.write().expect("MatchStore poisoned");
-        if inner.finalized {
-            return;
-        }
+        if inner.finalized { return; }
 
-        let max_confidence = inner
-            .confidence
-            .iter()
-            .copied()
-            .fold(0.0_f64, f64::max);
-        inner.max_confidence = max_confidence;
+        inner.max_confidence = inner.confidence.iter().copied().fold(0.0_f64, f64::max);
 
         let mut ids: Vec<u32> = inner.rows_by_sequence.keys().copied().collect();
         ids.sort_unstable();
-        inner.available_sequence_ids = ids;
+        inner.available_sequence_ids = ids.clone();
 
-        let mut aggregates: Vec<SequenceAggregate> =
-            Vec::with_capacity(inner.rows_by_sequence.len());
         let n_genomes = file_to_genome.iter().copied().max().map(|m| m + 1).unwrap_or(0);
-        let sequence_ids: Vec<u32> = inner.rows_by_sequence.keys().copied().collect();
+        let mut aggregates: Vec<SequenceAggregate> = Vec::with_capacity(ids.len());
 
-        for &qry_id in &sequence_ids {
-            let rows: Vec<u32> = inner.rows_by_sequence[&qry_id].clone();
+        for qry_id in ids {
+            let rows = &inner.rows_by_sequence[&qry_id];
 
             let mut per_genome = vec![0u32; n_genomes];
-            let mut per_chr: HashMap<u32, u32> = HashMap::new();
+            let mut per_chr: HashMap<(u32, u8), u32> = HashMap::new();
             let mut max_conf = 0.0_f64;
 
-            for &row in &rows {
+            for &row in rows {
                 let ri = row as usize;
-                let file_idx = inner.file_index[ri] as usize;
-                let gi = file_to_genome.get(file_idx).copied().unwrap_or(0);
+                let gi = file_to_genome.get(inner.file_index[ri] as usize).copied().unwrap_or(0);
                 let chr = inner.ref_contig_id[ri];
                 let conf = inner.confidence[ri];
 
-                if gi < per_genome.len() {
-                    per_genome[gi] += 1;
-                }
-
-                let key = ((gi as u32) << 8) | (chr as u32);
-                *per_chr.entry(key).or_insert(0) += 1;
-
+                if gi < per_genome.len() { per_genome[gi] += 1; }
+                *per_chr.entry((gi as u32, chr)).or_insert(0) += 1;
                 if conf > max_conf { max_conf = conf; }
             }
 
             let mut chr_counts: Vec<ChromosomeCount> = per_chr
                 .into_iter()
-                .map(|(key, count)| ChromosomeCount {
-                    genome_index: key >> 8,
-                    chromosome:   (key & 0xFF) as u8,
-                    count,
+                .map(|((genome_index, chromosome), count)| ChromosomeCount {
+                    genome_index, chromosome, count,
                 })
                 .collect();
             chr_counts.sort_unstable_by(|a, b| {
@@ -205,33 +174,8 @@ impl MatchStore {
                 .then_with(|| a.qry_contig_id.cmp(&b.qry_contig_id))
         });
 
-        let mut index: HashMap<u32, usize> = HashMap::with_capacity(aggregates.len());
-        for (pos, agg) in aggregates.iter().enumerate() {
-            index.insert(agg.qry_contig_id, pos);
-        }
-
         inner.aggregates = aggregates;
-        inner.aggregate_index = index;
         inner.finalized = true;
-    }
-
-    pub fn sequence_at(&self, position: usize) -> Option<SequenceAggregate> {
-        let inner = self.inner.read().expect("MatchStore poisoned");
-        inner.aggregates.get(position).cloned()
-    }
-
-    pub fn scan<F, T>(&self, mut f: F) -> Vec<T>
-    where
-        F: FnMut(&SequenceAggregate) -> Option<T>,
-    {
-        let inner = self.inner.read().expect("MatchStore poisoned");
-        let mut out = Vec::new();
-        for agg in &inner.aggregates {
-            if let Some(item) = f(agg) {
-                out.push(item);
-            }
-        }
-        out
     }
 
     pub fn scan_and_paginate<F>(
@@ -269,11 +213,6 @@ impl MatchStore {
         self.inner.read().expect("MatchStore poisoned").available_sequence_ids.clone()
     }
 
-    pub fn rows_for_sequence(&self, qry_contig_id: u32) -> Option<Vec<u32>> {
-        let inner = self.inner.read().expect("MatchStore poisoned");
-        inner.rows_by_sequence.get(&qry_contig_id).cloned()
-    }
-
     pub fn with_read<F, T>(&self, f: F) -> T
     where
         F: FnOnce(&MatchStoreInner) -> T,
@@ -292,11 +231,9 @@ pub struct ProgressSnapshot {
 
 #[inline]
 pub fn encode_orientation(c: char) -> u8 {
-    match c {
-        '-' => 1,
-        _ => 0,
-    }
+    if c == '-' { 1 } else { 0 }
 }
+
 #[inline]
 pub fn decode_orientation(v: u8) -> char {
     if v == 1 { '-' } else { '+' }
@@ -324,20 +261,19 @@ mod tests {
     fn push_match_updates_columns_and_indexes() {
         let store = MatchStore::new();
         let recs = vec![mk_record(0, 1, 10.0), mk_record(1, 1, 11.0)];
-        store.push_match(42, &[0, 1], &recs, &[0, 1]);
+        store.push_match(42, &recs, &[0, 1]);
 
         let snap = store.snapshot();
         assert_eq!(snap.total_matches, 1);
         assert_eq!(snap.total_records, 2);
         assert_eq!(snap.per_genome_records, vec![1, 1]);
-
         assert_eq!(store.distinct_sequence_count(), 1);
     }
 
     #[test]
     fn empty_match_does_not_desync() {
         let store = MatchStore::new();
-        store.push_match(42, &[], &[], &[]);
+        store.push_match(42, &[], &[]);
         let snap = store.snapshot();
         assert_eq!(snap.total_matches, 0);
         assert_eq!(snap.total_records, 0);

@@ -4,28 +4,6 @@ export interface FileData {
   color: string;
 }
 
-// Wire-format records — field names match the Rust serialization exactly.
-
-export interface MatchedRecord {
-  file_index: number;
-  ref_contig_id: number;
-  qry_start_pos: number;
-  qry_end_pos: number;
-  ref_start_pos: number;
-  ref_end_pos: number;
-  orientation: string;
-  confidence: number;
-  ref_len: number;
-}
-
-export interface BackendMatch {
-  qry_contig_id: number;
-  file_indices: number[];
-  records: MatchedRecord[];
-}
-
-// Donut-chart geometry types (frontend-only, derived).
-
 export interface DonutSeg {
   name: string;
   rows: number;
@@ -40,31 +18,4 @@ export interface DonutSeg {
   startAng: number;
   endAng: number;
   angRange: number;
-}
-
-export interface FlowPath {
-  path: string;
-  p1: { x: number; y: number };
-  p2: { x: number; y: number };
-  fromOri: string;
-  toOri: string;
-  color: string;
-  opacity: number;
-  width: number;
-  fromChr: number;
-  toChr: number;
-  conf: number;
-  fromFileIdx: number;
-  toFileIdx: number;
-  isSameGen: boolean;
-  qryContigId: number;
-  fromRec: MatchedRecord;
-  toRec: MatchedRecord;
-}
-
-export interface ChrDivision {
-  chr: number;
-  startAng: number;
-  endAng: number;
-  midAng: number;
 }

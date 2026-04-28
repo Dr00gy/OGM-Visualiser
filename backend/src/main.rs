@@ -2,34 +2,16 @@
 //!
 //! HTTP server that accepts 2–3 groups of XMAP files (one group per genome),
 //! parses them, finds query-sequence matches that appear across all genomes,
-//! and streams the resolved matches back to the frontend as a length-prefixed
-//! `bincode` byte stream.
+//! and streams the resolved matches back to the frontend.
 //!
-//! ## Module layout
-//! * [`xmap`] — all parsing, indexing, caching, and the parallel match engine.
-//! * [`api`] — HTTP handlers: session creation, per-file uploads, and the
-//!             streaming match endpoint.
-//! * [`store`] — columnar match store and aggregate index.
-//! * [`query`] — read-only HTTP handlers for the populated store.
-//!
-//! ## Request flow (session-based)
-//! Files are uploaded one at a time against a server-side session so that the
-//! browser never has to hold a single multi-gigabyte multipart body in memory
-//! (which previously stalled uploads around ~500 MiB of RAM pressure).
-//!
-//! 1. Client `POST /api/session` → server allocates a fresh session UUID and
-//!    a staging directory under the OS temp dir; returns the UUID.
-//! 2. For each file in each genome, client `POST /api/upload/:session_id`
-//!    with a multipart body containing exactly ONE field named using the
-//!    `g{gi}_r` (refineFinal) / `g{gi}_s{fi}` (sequence/xmap) convention.
-//!    The server streams the field to disk in the staging directory and
-//!    records it in the session.
-//! 3. Once every file is uploaded, client `POST /api/match/:session_id` to
-//!    kick off processing. The response is the length-prefixed bincode stream
-//!    described in [`api`]. The session (and its staging dir) is deleted
-//!    when the stream completes or the client disconnects.
-//! 4. If the client cancels before `match`, it can `DELETE /api/session/:id`
-//!    to clean up immediately.
+//! Sessions are used so the browser uploads files individually rather than
+//! holding a multi-gigabyte multipart body in memory:
+//! 1. `POST /api/session` → fresh session UUID + staging dir
+//! 2. `POST /api/upload/:session_id` per file (one multipart field named
+//!    `g{gi}_r` for refineFinal, `g{gi}_s{fi}` for sequence/xmap)
+//! 3. `POST /api/match/:session_id` to start processing; response is the
+//!    length-prefixed bincode stream (see [`api`])
+//! 4. `DELETE /api/session/:id` to clean up before match
 
 use std::sync::Arc;
 use axum::{routing::{get, post, delete}, Router};
@@ -59,26 +41,6 @@ async fn root() -> &'static str {
      - GET    /api/session/{session_id}/sequence-locations"
 }
 
-/// Application entry point.
-///
-/// # Setup steps
-/// 1. Build the shared [`xmap::XmapCache`] and [`api::SessionStore`], bundle
-///    them into an [`AppState`] wrapped in an [`Arc`] so every request handler
-///    sees the same cache/session state. Parsing a multi-gigabyte XMAP file
-///    is expensive; caching by content hash lets repeated uploads of the
-///    same file reuse prior work. The session store tracks each in-progress
-///    upload's staging directory and per-genome file list.
-/// 2. Configure a permissive CORS layer for the Vite dev server on
-///    `localhost:5173` (both `localhost` and `127.0.0.1` variants). In
-///    production this should be tightened to the real frontend origin.
-/// 3. Register routes and attach the state via `.with_state`.
-/// 4. Raise the default body-size limit on the upload route specifically —
-///    individual XMAP files can easily exceed axum's default 2 MiB cap. We
-///    set a generous 4 GiB ceiling (single-file, not total across the session)
-///    which is well above any realistic refineFinal or sequence file.
-/// 5. Bind on `0.0.0.0:8080` so the server is reachable from other hosts
-///    on the LAN (useful for demoing on a different machine than the one
-///    running `cargo run`).
 #[tokio::main]
 async fn main() {
     let state = Arc::new(AppState {
@@ -88,6 +50,7 @@ async fn main() {
 
     api::spawn_session_janitor(Arc::clone(&state.sessions));
 
+    // Permissive CORS for the Vite dev server.
     let cors = CorsLayer::new()
         .allow_origin([
             "http://localhost:5173".parse().unwrap(),
@@ -102,7 +65,7 @@ async fn main() {
         .route(
             "/api/upload/{session_id}",
             post(api::upload_file)
-                .layer(DefaultBodyLimit::max(4 * 1024 * 1024 * 1024)), // 4 GiB per file
+                .layer(DefaultBodyLimit::max(4 * 1024 * 1024 * 1024)),
         )
         .route("/api/match/{session_id}", post(api::stream_matches))
         .route("/api/session/{session_id}", delete(api::delete_session))
