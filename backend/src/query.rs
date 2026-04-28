@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::api::AppState;
 use crate::store::{SequenceAggregate, decode_orientation};
 
-const MAX_RECORDS_PER_ENTRY: usize = 50;
+const MAX_RECORDS_PER_ENTRY: usize = 100;
 const FLOW_LIMIT_CAP: u32 = 1_000_000;
 
 fn resolve_session(
