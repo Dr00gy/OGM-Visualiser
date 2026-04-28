@@ -12,10 +12,6 @@ use uuid::Uuid;
 use crate::api::AppState;
 use crate::store::{SequenceAggregate, decode_orientation};
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 fn resolve_session(
     state: &AppState,
     session_id: &str,
@@ -57,10 +53,6 @@ fn framed_bincode<T: Serialize>(value: &T) -> Result<Response, StatusCode> {
     ).into_response())
 }
 
-// ---------------------------------------------------------------------------
-// /api/session/:id/meta
-// ---------------------------------------------------------------------------
-
 /// Response for `GET /api/session/:id/meta`.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MetaResponse {
@@ -86,10 +78,6 @@ pub async fn get_meta(
     };
     Ok(Json(resp))
 }
-
-// ---------------------------------------------------------------------------
-// /api/session/:id/sequences — paginated sequence overview
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
 pub struct SequencesQuery {
@@ -138,8 +126,6 @@ pub async fn get_sequences(
                 if needle.is_empty() { true }
                 else {
                     agg.per_chromosome.iter().any(|c| {
-                        // Format "g{gi}-{chr}" matches the frontend's
-                        // previous search key format.
                         let key = format!("{}-{}", c.genome_index, c.chromosome);
                         ci_contains(&key, &needle)
                     })
@@ -158,10 +144,6 @@ pub async fn get_sequences(
 
     Ok(Json(SequencesPage { total, items }))
 }
-
-// ---------------------------------------------------------------------------
-// /api/session/:id/matches — paginated deduped match table
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
 pub struct MatchesQuery {
@@ -301,21 +283,12 @@ pub async fn get_matches(
     Ok(Json(MatchesPage { total, items }))
 }
 
-// ---------------------------------------------------------------------------
-// /api/session/:id/flows — bincode flow pairs for the donut
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Deserialize)]
 pub struct FlowsQuery {
-    /// Restrict to one query sequence id.
     pub qry: Option<u32>,
-    /// First genome of a genome-pair filter.
     pub g1: Option<u32>,
-    /// Second genome of a genome-pair filter.
     pub g2: Option<u32>,
-    /// Chromosome filter (requires `chr_genome` to scope the genome).
     pub chr: Option<u8>,
-    /// Which genome the chromosome filter applies to.
     pub chr_genome: Option<u32>,
     #[serde(default)]
     pub show_duplicates: bool,
@@ -350,7 +323,7 @@ pub async fn get_flows(
     let f_chr = params.chr;
     let f_chr_genome = params.chr_genome;
     let want_same_genome = params.show_duplicates;
-    let limit = params.limit.min(1_000_000) as usize;  // hard ceiling
+    let limit = params.limit.min(1_000_000) as usize;
     let flows: Vec<WireFlow> = store.with_read(|inner| {
         use std::collections::HashSet;
         let mut out: Vec<WireFlow> = Vec::with_capacity(limit.min(65536));
@@ -360,7 +333,6 @@ pub async fn get_flows(
             if out.len() >= limit { break; }
             if rows.len() < 2 { continue; }
 
-            // Sequence filter
             if let Some(want) = f_qry {
                 if *sequence_id != want { continue; }
             }
@@ -428,10 +400,6 @@ pub async fn get_flows(
     framed_bincode(&flows)
 }
 
-// ---------------------------------------------------------------------------
-// /api/session/:id/sequence-locations
-// ---------------------------------------------------------------------------
-
 /// Query params for `/sequence-locations`.
 #[derive(Debug, Deserialize)]
 pub struct SequenceLocationsQuery {
@@ -488,11 +456,7 @@ pub async fn get_sequence_locations(
         locations,
     }))
 }
-
-// ---------------------------------------------------------------------------
-// /api/session/:id/chromosome-records — bincode records for AreaAnalysis
-// ---------------------------------------------------------------------------
-
+// chrom records
 #[derive(Debug, Deserialize)]
 pub struct ChromosomeRecordsQuery {
     pub genomes: Option<String>,
@@ -546,7 +510,7 @@ pub async fn get_chromosome_records(
             let file_idx = inner.file_index[ri] as usize;
             let gi = file_to_genome.get(file_idx).copied().unwrap_or(0) as u32;
 
-            // Genome filter.
+            // genome filter and dedup
             if let Some(ref want) = genome_filter {
                 if !want.contains(&gi) { continue; }
             }
@@ -557,7 +521,6 @@ pub async fn get_chromosome_records(
                 if qry_contig_id != q { continue; }
             }
 
-            // Dedup.
             let start_bits = inner.ref_start_pos[ri].to_bits();
             let end_bits = inner.ref_end_pos[ri].to_bits();
             let key = (qry_contig_id, start_bits, end_bits);

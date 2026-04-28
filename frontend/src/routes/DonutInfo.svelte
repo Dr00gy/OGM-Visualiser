@@ -12,10 +12,6 @@
     type SearchType,
   } from '$lib/queryClient';
 
-  // -------------------------------------------------------------------------
-  // Props
-  // -------------------------------------------------------------------------
-
   export let files: FileData[] = [];
   export let fileToGen: number[] = [];
   export let segments: DonutSeg[] = [];
@@ -39,10 +35,6 @@
   export let sessId: string | null = null;
 
   export let isQueryable: boolean = false;
-
-  // -------------------------------------------------------------------------
-  // Search state (from global store)
-  // -------------------------------------------------------------------------
 
   let ovQry = '';
   let mtcQry = '';
@@ -69,10 +61,6 @@
     searchStore.update(state => ({ ...state, mtcType }));
   }
 
-  // -------------------------------------------------------------------------
-  // Pagination state
-  // -------------------------------------------------------------------------
-
   let editOvPage = false;
   let editMtcPage = false;
   let ovPageInput = '';
@@ -86,10 +74,6 @@
 
   $: ovQry, ovType, ovPage = 1;
   $: mtcQry, mtcType, mtcPage = 1;
-
-  // -------------------------------------------------------------------------
-  // Overview state
-  // -------------------------------------------------------------------------
 
   type OvStat = {
     totOcc: number;
@@ -185,10 +169,6 @@
     }
   }
 
-  // -------------------------------------------------------------------------
-  // Matches state (backed by /matches endpoint)
-  // -------------------------------------------------------------------------
-
   type MtcItem = {
     qry_contig_id: number;
     records: MatchedRecord[];
@@ -202,10 +182,6 @@
   let mtcLoading = false;
   let mtcAbort: AbortController | null = null;
   const mtcDeb = makeDebouncer(400);
-
-  // -------------------------------------------------------------------------
-  // Sequence-ID picker
-  // -------------------------------------------------------------------------
 
   function mtcEntryToItem(entry: MatchEntry): MtcItem {
     return {
@@ -255,10 +231,6 @@
     mtcPage;
     mtcDeb.schedule(() => reloadMtc());
   }
-
-  // -------------------------------------------------------------------------
-  // Pagination controls
-  // -------------------------------------------------------------------------
 
   function goToOvPage(page: number) {
     ovPage = Math.max(1, Math.min(page, totOvPages));
@@ -322,10 +294,6 @@
       default: return 'Search...';
     }
   })();
-
-  // -------------------------------------------------------------------------
-  // Cleanup
-  // -------------------------------------------------------------------------
 
   onDestroy(() => {
     unsub();
@@ -1174,9 +1142,7 @@
   .occurrence { margin-top: 0.8rem; }
   .occurrence-list { margin-bottom: 0.5rem; }
 
-  /* Shown under the occurrence list when the server truncated the
-     records (more than MAX_RECORDS_PER_ENTRY on the backend).
-     Subtle — not an error, just an informational "there's more" tag. */
+  /* Shown when the server truncated records (more on the backend). */
   .records-truncated-hint {
     margin-top: 0.375rem;
     padding: 0.25rem 0.5rem;

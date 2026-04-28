@@ -1,7 +1,4 @@
-// ---------------------------------------------------------------------------
-// Server-side types (mirror query.rs).
-// JSON keys are wire fields and must stay exact. Interface NAMES are FE-only.
-// ---------------------------------------------------------------------------
+// Server-side types mirror query.rs.
 
 export interface ChromosomeCount {
   genome_index: number;
@@ -55,10 +52,6 @@ export interface MatchesPage {
 }
 
 export type SearchType = 'sequence' | 'chromosome' | 'confidence';
-
-// ---------------------------------------------------------------------------
-// Base URL + fetch helpers
-// ---------------------------------------------------------------------------
 
 const BASE = 'http://localhost:8080';
 
@@ -174,10 +167,6 @@ export function fetchMatchesPage(
   return fetchJSON<MatchesPage>(url, opts.signal);
 }
 
-// ---------------------------------------------------------------------------
-// Flows endpoint (bincode)
-// ---------------------------------------------------------------------------
-
 export interface WireFlow {
   qry_contig_id: number;
   from_genome: number;
@@ -220,7 +209,7 @@ export async function fetchFlows(
 /**
  * bincode layout:
  *   [u64 LE vec length]
- *   then for each element, fields in declaration order:
+ *   then for each element:
  *     qry_contig_id     u32
  *     from_genome       u32
  *     from_chromosome   u8
@@ -366,7 +355,7 @@ export async function fetchSeqLocations(
  *   chromosome          u8
  *   chromosome_ref_len  f64
  *   records_len         u64 LE
- *   records: each record is a `WireAreaRecord` in declaration order:
+ *   records: each record has fields in declaration order:
  *     qry_contig_id   u32
  *     file_index      u32
  *     genome_index    u32
@@ -375,7 +364,7 @@ export async function fetchSeqLocations(
  *     qry_end_pos     f64
  *     ref_start_pos   f64
  *     ref_end_pos     f64
- *     orientation     char (1..4 UTF-8 bytes; always ASCII in real data)
+ *     orientation     char (1..4 UTF-8 bytes; ASCII in practice)
  *     confidence      f64
  *     ref_len         f64
  */

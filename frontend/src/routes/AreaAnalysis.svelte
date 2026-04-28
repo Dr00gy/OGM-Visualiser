@@ -1,45 +1,8 @@
 <script lang="ts">
-  /**
-   * AreaAnalysis
-   * -----------------------------------------------------------------------
-   * The "Analytic Browser" tab: a window-at-a-time view of sequence alignments
-   * on a chosen chromosome, rendered as stacked horizontal bars where each
-   * bar is one alignment. The user can:
-   *
-   *   - pick which GENOMES to include (not files — selections collapse to
-   *     the genome level via fileToGen[]),
-   *   - pick a chromosome (1..24),
-   *   - page through fixed-size windows of that chromosome,
-   *   - search for a specific query sequence ID (jumps to windows containing it),
-   *   - expand the "Chromosome Overview" panel to see hit density across all
-   *     chromosomes at once,
-   *   - expand the "Window Sequence Comparison" panel to see which sequences
-   *     are shared / unique per genome inside the current window.
-   *
-   * Performance considerations
-   * --------------------------
-   * This component is large because it handles potentially millions of
-   * records, so it leans heavily on caching layers:
-   *
-   *   LAYER 1 — colorCache:
-   *       Memoises HSL colour generation per sequence id.
-   *   LAYER 2 — cachedBars:
-   *       The computed bar geometry (x/width/key) for the current window.
-   *       Invalidated when window bounds or the filtered record list change.
-   *   LAYER 3 — cachedStacked:
-   *       The stacked-track layout. Same invalidation as LAYER 2.
-   *
-   * Plus an IntersectionObserver gate: the whole component does no work
-   * until it scrolls into view (isVisible), because the user may switch
-   * tabs / scroll away before we'd want to pay for reactive computations.
-   *
-   * Filter-state store vs local vars
-   * --------------------------------
-   * `areaFltState` persists across reloads via localStorage.
-   * We keep local mirrors (selGens, winSize, etc.) for template
-   * ergonomics and push changes back through `areaFltState.update`.
-   * `searchStore` likewise persists the search query across tab switches.
-   */
+  // The "Analytic Browser" tab: window-at-a-time view of sequence alignments
+  // on a chosen chromosome, rendered as stacked horizontal bars. Heavy
+  // caching (color, bar geometry, stacked tracks) plus an IntersectionObserver
+  // gate so nothing computes until the tab is actually visible.
 
   import { onMount, onDestroy } from 'svelte';
   import type { BackendMatch, ChromosomeInfo } from '$lib/bincodeDecoder';
@@ -54,101 +17,48 @@
     type SeqLocation,
   } from '$lib/queryClient';
 
-  /**
-   * Component props — all data comes in from +page.svelte, the component
-   * does not fetch its own.
-   *
-   * `matches` is now deprecated but kept as a no-op prop for
-   * backwards compatibility with callers. Chromosome data is fetched
-   * from the backend via `sessId` below. When `isQueryable` is false
-   * the component sits dormant (shows empty state); when true, visible,
-   * and the user has picked genomes+chromosome, a fetch happens.
-   */
+  // All data flows in from +page.svelte. Component fetches chromosome
+  // data via sessId once isQueryable && isVisible.
   export let matches: BackendMatch[] = [];
-  /** One entry per genome (2–3). name/color come from _page.svelte genomes array. */
+  /** One entry per genome (2–3). */
   export let files: FileData[] = [];
-  /**
-   * Maps flat file_index (record.file_index from backend) → genome index.
-   * Used to translate records to their genome before filtering/display.
-   */
+  /** Flat file_index → genome index. */
   export let fileToGen: number[] = [];
-  /** Per-genome chromosome info from backend (ref_contig_id + ref_len per chromosome). */
+  /** Per-genome chromosome info (ref_contig_id + ref_len). */
   export let chrInfo: ChromosomeInfo[][] = [];
 
-  /** Session id for backend queries. `null` means no active session. */
+  /** Session id for backend queries. */
   export let sessId: string | null = null;
 
-  /**
-   * True once the match phase has completed and the session
-   * is ready to answer query endpoints. Fetches are gated on this.
-   */
+  /** True once match phase has completed. Fetches gated on this. */
   export let isQueryable: boolean = false;
 
-  /**
-   * Lazy-loading state: the IntersectionObserver flips `isVisible` to true
-   * once the component scrolls into view, and `isInit` is a latch to
-   * guarantee we only wire up subscriptions / observer logic once.
-   */
+  // IntersectionObserver-driven lazy init.
   let isVisible = false;
   let containerEl: HTMLElement;
   let isInit = false;
 
-  /**
-   * Genome selection state (replaces per-file selection).
-   * Holds genome indices (0, 1, 2) that are currently active.
-   * Stored in areaFltState.selFiles for persistence — the field name
-   * predates the rename from "files" to "genomes".
-   */
+  // Selected genome indices (persisted in areaFltState.selFiles).
   let selGens: number[] = [];
-  /** Which chromosome (1..24) is currently being browsed. */
   let selChr = 1;
-  /** Window size in bp. 100 kb is a reasonable default for most use cases. */
   let winSize = 100000;
-  /** Zero-based window index within the chromosome. */
   let curWinIdx = 0;
-  /** The sequence record currently hovered by the mouse (tooltip source). */
   let hoverRec: any = null;
 
-  // -------------------------------------------------------------------------
-  // Chromosome-record cache + async fetch machinery
-  // -------------------------------------------------------------------------
-  //
-  // Cache key: `"{sorted genome indices}|{chromosome}"`. When the user
-  // switches chromosome, we check the cache first; only cold keys hit
-  // the server. When `selGens` changes (genome selection set
-  // changes) the whole cache is invalidated because the key semantics
-  // have changed.
-  //
-  // The cache is NOT persisted. Each new upload gets a fresh session id
-  // and therefore a fresh cache.
+  // Chromosome-record cache. Key: `"{sorted genome indices}|{chromosome}"`.
+  // Invalidated when selGens or sessId changes.
 
-  /** Per-chromosome response cache. Map<cacheKey, response>. */
   let chrRecCache = new Map<string, ChrRecsResponse>();
-
-  /** Current in-flight request, so we can abort when selections change. */
   let chrRecsAbort: AbortController | null = null;
-
-  /** True while a chromosome-records fetch is in progress. */
   let chrRecsLdg = false;
-
-  /** Tracks the cache key whose response is currently displayed. */
   let chrRecsActKey: string | null = null;
-
-  /** The chromosome records currently driving the UI. */
   let chrRecs: WireAreaRecord[] = [];
-
-  /** Chromosome reference length reported by the server. */
   let chrRefLenFetched: number = 0;
 
-  /** Cache key helper. */
   function cacheKey(genomes: number[], chr: number): string {
     return `${[...genomes].sort((a, b) => a - b).join(',')}|${chr}`;
   }
 
-  /**
-   * Load chromosome records for the current selection, using the cache
-   * when available.
-   */
   async function reloadChrRecs() {
     if (!sessId || !isQueryable || !isVisible) {
       chrRecs = [];
@@ -208,11 +118,8 @@
     }
   }
 
-  /**
-   * Fetch trigger. Runs whenever any of the listed deps changes.
-   * No debounce — chromosome switches are user-driven single clicks; the
-   * AbortController + stale-key check keep the response handling safe.
-   */
+  // Refetch when any dep changes. Stale-key check + AbortController
+  // handle in-flight switches.
   $: {
     void sessId;
     void isQueryable;
@@ -222,7 +129,7 @@
     reloadChrRecs();
   }
 
-  /** Cache invalidation on genome-selection change. */
+  // Invalidate cache on genome-selection change.
   let lastGensKey = '';
   $: {
     const gk = [...selGens].sort((a, b) => a - b).join(',');
@@ -233,7 +140,7 @@
     }
   }
 
-  /** Cache invalidation on session change. */
+  // Invalidate cache on session change.
   let lastSessId: string | null = null;
   $: {
     if (sessId !== lastSessId) {
@@ -243,20 +150,14 @@
     }
   }
 
-  // -------------------------------------------------------------------------
-  // Sequence-location cache for the overview search
-  // -------------------------------------------------------------------------
+  // Sequence-location cache for the overview search.
 
   let seqLocsCache = new Map<number, SeqLocation[]>();
   let seqLocsAbort: AbortController | null = null;
 
-  /**
-   * Locations for the currently-searched sequence, or `null` when there's
-   * no active search.
-   */
+  /** Locations for currently-searched sequence, or null. */
   let activeSeqLocs: SeqLocation[] | null = null;
 
-  /** Fetch + cache locations for a given sequence id. */
   async function loadSeqLocs(seqId: number) {
     if (!sessId || !isQueryable) {
       activeSeqLocs = null;
@@ -291,7 +192,6 @@
     }
   }
 
-  /** React to search state. */
   $: if (isSrch && submittedQry) {
     const id = parseInt(submittedQry);
     if (!Number.isNaN(id)) loadSeqLocs(id);
@@ -299,7 +199,7 @@
     activeSeqLocs = null;
   }
 
-  /** Invalidate the seq-locations cache on genome change. */
+  // Invalidate seq-locations cache on genome change.
   let lastLocGensKey = '';
   $: {
     const gk = [...selGens].sort((a, b) => a - b).join(',');
@@ -317,7 +217,6 @@
     }
   }
 
-  /** Invalidate seq-locations cache on session change. */
   let lastLocSessId: string | null = null;
   $: {
     if (sessId !== lastLocSessId) {
@@ -331,41 +230,33 @@
   }
 
 
-  /** Search state (live vs submitted). */
   let srchQry = '';
   let submittedQry = '';
 
-  /** Window indices that contain at least one hit for the searched seq. */
+  /** Window indices containing at least one hit for the searched seq. */
   let fltWins: number[] = [];
   let isSrch = false;
 
-  /** Re-execute persisted search after subscriptions wire up. */
   let shouldRerun = false;
 
-  /** Chromosome Overview Panel state. */
   let ovPanelOpen = false;
 
-  /** One dot (a search-hit cluster) on a chromosome line. */
+  /** One dot (hit cluster) on a chromosome line. */
   interface OvDot {
     /** Fractional position along the chromosome line (0..1). */
     xFrac: number;
-    /** Estimated window index the user would land on if they click this dot. */
+    /** Window index a click would land on. */
     estWin: number;
   }
 
-  /** One chromosome's horizontal line in the overview panel. */
   interface ChrLine {
     chrId: number;
     refLen: number;
-    /** 12 tick markers (start + 10 intermediate + end) — positions in bp. */
+    /** 12 tick markers (start + 10 intermediate + end) in bp. */
     markers: number[];
-    /** Dots aggregated from the search hits that fall on this chromosome. */
     dots: OvDot[];
   }
 
-  /**
-   * Build chromosome overview lines for a given genome.
-   */
   function buildChrLines(
     genIdx: number,
     chrInfoForGen: ChromosomeInfo[],
@@ -441,12 +332,10 @@
     });
   }
 
-  /** Reactive: per-genome chromosome overview lines. */
   $: ovData = ovPanelOpen
     ? buildOvData(isSrch, submittedQry, activeSeqLocs, chrInfo, files, fileToGen, winSize, selGens)
     : [];
 
-  /** Builds the full overview data structure — one entry per genome. */
   function buildOvData(
     _isSrch: boolean,
     _submittedQry: string,
@@ -469,7 +358,6 @@
     }));
   }
 
-  /** Navigate to a specific window from an overview-dot click. */
   async function navFromDot(chrId: number, estWin: number) {
     selChr = chrId;
 
@@ -529,20 +417,17 @@
     clearCaches();
   }
 
-  /** Window Sequence Comparison Panel state. */
   let compPanelOpen = false;
 
-  /** Summary of which sequences are shared vs unique across genomes. */
   interface SeqComp {
-    /** Query-sequence ids present in ALL selected genomes inside this window. */
+    /** Sequences present in ALL selected genomes inside the window. */
     shared: number[];
-    /** Per-genome breakdown of sequences NOT shared with all. */
+    /** Per-genome breakdown of sequences not shared with all. */
     uniqPerGen: { genIdx: number; genName: string; genColor: string; seqIds: number[] }[];
     /** Total distinct sequence ids across all genomes in this window. */
     totUniq: number;
   }
 
-  /** Build the comparison summary for the current window. */
   function buildWinComp(
     _records: WireAreaRecord[],
     _selGens: number[],
@@ -602,17 +487,13 @@
     };
   }
 
-  /** Reactive wrapper: only compute when the panel is open. */
   $: winComp = compPanelOpen
     ? buildWinComp(chrRecs, selGens, winStart, winEnd, files)
     : { shared: [], uniqPerGen: [], totUniq: 0 } as SeqComp;
 
-  // ---------------------------------------------------------------------
-  // CACHING LAYER 1 — Color cache.
-  // ---------------------------------------------------------------------
+  // Color cache: stable HSL per sequence id.
   const colorCache = new Map<number, string>();
 
-  /** Generate a stable, visually-distinct HSL colour for a sequence id. */
   function seqColor(seqId: number): string {
     if (colorCache.has(seqId)) {
       return colorCache.get(seqId)!;
@@ -623,9 +504,7 @@
     return color;
   }
 
-  // ---------------------------------------------------------------------
-  // CACHING LAYER 2 — Rendered bar cache.
-  // ---------------------------------------------------------------------
+  // Bar geometry cache.
   interface CachedBar {
     record: any;
     startX: number;
@@ -640,9 +519,7 @@
   let lastWinEnd = -1;
   let lastFltRecs: any[] = [];
 
-  // ---------------------------------------------------------------------
-  // CACHING LAYER 3 — Stacked-bar memoisation.
-  // ---------------------------------------------------------------------
+  // Stacked-bar memoisation.
   let lastStackIn: {
     records: any[];
     winStart: number;
@@ -650,7 +527,6 @@
   } | null = null;
   let cachedStacked: any[][] = [];
 
-  /** Memoised wrapper around stackBars(). */
   function getCachedStacked(records: any[], winStart: number, winEnd: number): any[][] {
     if (
       lastStackIn &&
@@ -669,7 +545,6 @@
     return stacked;
   }
 
-  /** Turn stacked tracks into cached bar geometry. */
   function genCachedBars(
     stacked: any[][],
     winStart: number,
@@ -712,7 +587,6 @@
     return newCache;
   }
 
-  /** Invalidate every cache layer. */
   function clearCaches() {
     cachedBars = [];
     lastWinStart = -1;
@@ -722,16 +596,12 @@
     cachedStacked = [];
   }
 
-  // ---------------------------------------------------------------------
-  // Lazy-loading wiring (IntersectionObserver)
-  // ---------------------------------------------------------------------
+  // IntersectionObserver-driven lazy init.
   let observer: IntersectionObserver;
 
-  /** Store-subscription handles. */
   let unsubSrch: (() => void) | null = null;
   let unsubFlt: (() => void) | null = null;
 
-  /** Wire up store subscriptions on first visibility. */
   function initSubs() {
     if (unsubSrch || unsubFlt) return;
 
@@ -745,9 +615,6 @@
     });
 
     unsubFlt = areaFltState.subscribe(state => {
-      // selFiles in the store now holds GENOME indices (0, 1, 2);
-      // the field name kept its old "files" label for back-compat with
-      // serialized state in users' localStorage.
       selGens = state.selFiles;
       selChr = state.selChr;
       winSize = state.winSize;
@@ -809,7 +676,6 @@
     });
   }
 
-  /** Mount handler: set up IntersectionObserver. */
   onMount(() => {
     observer = new IntersectionObserver(
       (entries) => {
@@ -838,7 +704,6 @@
     }
   });
 
-  /** Run a sequence-id search. */
   function runSearch(query: string) {
     if (!query.trim()) {
       resetSrch();
@@ -869,12 +734,10 @@
     }
   }
 
-  /** Submit handler for the search input. */
   function onSearch() {
     runSearch(srchQry.trim());
   }
 
-  /** Find min/max ref positions across a record set. */
   function getChrRange(records: any[]) {
     if (records.length === 0) return { min: 0, max: 100000 };
     const min = Math.min(...records.map(r => r.ref_start_pos));
@@ -882,7 +745,6 @@
     return { min: Math.floor(min), max: Math.ceil(max) };
   }
 
-  /** Stack overlapping alignments into parallel tracks. */
   function stackBars(records: any[], winStart: number, winEnd: number) {
     const visible = records.filter(r =>
       r.ref_end_pos >= winStart && r.ref_start_pos <= winEnd
@@ -920,14 +782,12 @@
     return stacked;
   }
 
-  /** Convert a genomic position to a percentage within the current window. */
   function posToX(pos: number, winStart: number, winSize: number): number {
     const rel = pos - winStart;
     const pct = (rel / winSize) * 100;
     return Math.max(0, Math.min(100, pct));
   }
 
-  /** Clamp curWinIdx into the valid range for a hypothetical genome selection. */
   function clampWinIdx(newGens: number[]): number {
     if (newGens.length === 0) return 0;
     let refLen = winSize;
@@ -943,7 +803,6 @@
     return Math.min(curWinIdx, Math.max(0, newTotWins - 1));
   }
 
-  /** Toggle one genome in the selection. */
   function toggleGen(genIdx: number) {
     let newSelGens: number[];
 
@@ -967,7 +826,6 @@
     resetSrch(clamped);
   }
 
-  /** "Select All" button. */
   function selectAllGens() {
     const all = files.map((_, idx) => idx);
     const clamped = clampWinIdx(all);
@@ -984,7 +842,6 @@
     resetSrch(clamped);
   }
 
-  /** "Clear All" button. */
   function clearGens() {
     selGens = [];
     curWinIdx = 0;
@@ -999,7 +856,6 @@
     resetSrch();
   }
 
-  /** Blow away the current search and (optionally) preserve window position. */
   function resetSrch(preserved: number = 0) {
     srchQry = '';
     submittedQry = '';
@@ -1017,7 +873,6 @@
     clearCaches();
   }
 
-  /** Compute which windows contain at least one hit for the given seq id. */
   function findWinsWithSeq(seqId: number, records: any[], range: any, winSize: number): number[] {
     const seqRecs = records.filter(record => record.qry_contig_id === seqId);
     if (seqRecs.length === 0) return [];
@@ -1038,7 +893,6 @@
     return Array.from(wins).sort((a, b) => a - b);
   }
 
-  /** Enter = submit, Escape = clear. */
   function onSearchKeydown(e: KeyboardEvent) {
     if (e.key === 'Enter') {
       onSearch();
@@ -1047,12 +901,10 @@
     }
   }
 
-  /** UI "×" button inside the search field. */
   function clearSrch() {
     resetSrch();
   }
 
-  /** Next window navigation. */
   function nextWin() {
     if (isSrch && fltWins.length > 0) {
       const inFlt = fltWins.indexOf(curWinIdx);
@@ -1066,7 +918,6 @@
     }
   }
 
-  /** Previous window navigation. */
   function prevWin() {
     if (isSrch && fltWins.length > 0) {
       const inFlt = fltWins.indexOf(curWinIdx);
@@ -1080,11 +931,6 @@
     }
   }
 
-  // ---------------------------------------------------------------------
-  // Reactive chain that produces everything the template renders.
-  // ---------------------------------------------------------------------
-
-  /** chrRecs further filtered by the search seq if active. */
   $: fltChrRecs = isSrch
     ? chrRecs.filter(record => {
         const seqId = parseInt(submittedQry);
@@ -1092,23 +938,17 @@
         return record.qry_contig_id === seqId;
       })
     : chrRecs;
-  /** Min/max bp positions across this chromosome's records. */
   $: chrRange = getChrRange(chrRecs);
-  /** Chromosome length in bp. */
   $: chrRefLen = chrRefLenFetched > 0
     ? chrRefLenFetched
     : (chrRecs.length > 0 ? chrRecs[0].ref_len : winSize);
 
-  /** Total number of windows that tile the chromosome. */
   $: totWins = Math.ceil(chrRefLen / winSize);
-  /** Total windows shown to the user — filtered subset when searching. */
   $: effTotWins = isSrch ? fltWins.length : totWins;
-  /** 1-based "page number" for display. */
   $: effCurWinIdx = isSrch ?
     (fltWins.indexOf(curWinIdx) + 1 || 1) :
     (curWinIdx + 1);
 
-  /** bp bounds of the current window. Clamped to chromosome length. */
   $: winStart = chrRange.min + (curWinIdx * winSize);
   $: winEnd = Math.min(winStart + winSize, chrRefLen);
 
@@ -1119,7 +959,6 @@
   /** Sorted unique sequence ids — drives the legend list. */
   $: uniqSeqs = Array.from(new Set(fltChrRecs.map(r => r.qry_contig_id))).sort((a, b) => a - b);
 
-  /** Prev/next button enable states. */
   $: canGoPrev = isSrch ?
     fltWins.indexOf(curWinIdx) > 0 :
     curWinIdx > 0;
@@ -1127,10 +966,8 @@
     fltWins.indexOf(curWinIdx) < fltWins.length - 1 :
     curWinIdx < totWins - 1;
 
-  /** Chromosome dropdown options — 1..24. */
   const CHRS = Array.from({ length: 24 }, (_, i) => i + 1);
 
-  /** Chromosome dropdown change handler. */
   function onChrChange() {
     curWinIdx = 0;
 
@@ -1147,17 +984,14 @@
     }
   }
 
-  /** Click-to-edit state for the "page N of M" indicator. */
   let editWinPage = false;
   let winPageInput = '';
 
-  /** Activate the input. */
   function startEditWinPage() {
     editWinPage = true;
     winPageInput = effCurWinIdx.toString();
   }
 
-  /** Commit a manual window jump. */
   function submitWinJump() {
     const n = parseInt(winPageInput);
     if (!isNaN(n)) {
@@ -1173,7 +1007,6 @@
     editWinPage = false;
   }
 
-  /** Enter submits, Escape cancels. */
   function onWinPageKeydown(e: KeyboardEvent) {
     if (e.key === 'Enter') {
       submitWinJump();
@@ -1205,12 +1038,10 @@
     if (hoverRec !== record) hoverRec = record;
   }
 
-  /** Mouse-leave on the viewport. */
   function onBarMouseLeave() {
     hoverRec = null;
   }
 
-  /** Component teardown. */
   onDestroy(() => {
     if (unsubSrch) unsubSrch();
     if (unsubFlt) unsubFlt();
@@ -1227,7 +1058,6 @@
       <p>Loading Area Analysis...</p>
     </div>
   {:else}
-    <!-- Genome selection controls -->
     <div class="controls">
       <div class="control-group full-width">
         <label for="genome-selection">Select Genomes:</label>
@@ -1749,7 +1579,6 @@
     max-height: 10rem;
     overflow-y: auto;
     padding-right: 0.25rem;
-    /* Subtle scrollbar so it doesn't look broken when small */
     scrollbar-width: thin;
     scrollbar-color: var(--border-color-dark) transparent;
   }
@@ -2153,9 +1982,7 @@
     top: 50%;
     width: 8px;
     height: 8px;
-    /* Green to signal "hit found here". Distinct from the accent
-       colour used for the chromosome markers themselves so the user
-       can tell at a glance which dots are markers vs search hits. */
+    /* Green = "search hit"; distinct from accent-coloured chromosome markers. */
     background: #22c55e;
     border: 1px solid var(--bg-secondary);
     border-radius: 50%;

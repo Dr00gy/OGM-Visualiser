@@ -9,35 +9,26 @@ pub struct MatchStore {
 
 #[derive(Default)]
 pub struct MatchStoreInner {
-    // ------------- Columns (one entry per resolved record) -------------
-    // Field names mirror the xmap column headers by design — do not rename.
-    /// Flat file index the record came from. Used to resolve genome.
+    // Columnar storage, one entry per resolved record.
+    // Field names mirror the xmap headers.
     pub file_index:    Vec<u32>,
-    /// Chromosome (1..24 for human).
     pub ref_contig_id: Vec<u8>,
-    /// Query start position (bp).
     pub qry_start_pos: Vec<f64>,
-    /// Query end position (bp).
     pub qry_end_pos:   Vec<f64>,
-    /// Reference start position (bp).
     pub ref_start_pos: Vec<f64>,
-    /// Reference end position (bp).
     pub ref_end_pos:   Vec<f64>,
     /// See [`encode_orientation`] / [`decode_orientation`].
     pub orientation:   Vec<u8>,
-    /// Alignment confidence.
     pub confidence:    Vec<f64>,
-    /// Length of the reference chromosome (bp).
     pub ref_len:       Vec<f64>,
     pub qry_contig_id: Vec<u32>,
 
-    // ------------- Per-match metadata (one entry per match) -------------
+    // Per-match metadata, one entry per match.
     pub match_sequence_ids:   Vec<u32>,
     pub match_file_indices:   Vec<Vec<u32>>,
     pub match_record_counts:  Vec<u32>,
 
-    // ------------- Indexes (built during ingestion) -------------
-    /// Maps query-sequence id to the row indices in the columns above.
+    /// qry_contig_id → row indices into the columns above.
     pub rows_by_sequence: HashMap<u32, Vec<u32>>,
     pub total_records: u64,
     pub total_matches: u64,
@@ -51,30 +42,18 @@ pub struct MatchStoreInner {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SequenceAggregate {
-    /// The query-sequence id (what the frontend paginates over).
-    /// NOTE: kept as `qry_contig_id` because this is the xmap wire field name.
     pub qry_contig_id: u32,
-    /// Total record occurrences across all files/genomes.
     pub total_occurrences: u32,
-    /// `per_genome[gi]` = count of records for this sequence in genome `gi`.
-    /// Short vec (typically 2-3 entries); dense, zero-filled.
+    /// Dense, zero-filled count per genome.
     pub per_genome: Vec<u32>,
-    /// Per-(genome, chromosome) occurrence counts.
-    /// Key format matches the frontend's "gi-chr" composite for
-    /// substring search on `chromosomeSearchType`.
     pub per_chromosome: Vec<ChromosomeCount>,
-    /// Max confidence seen across all records of this sequence.
     pub max_confidence: f64,
 }
 
-/// One entry inside `SequenceAggregate.per_chromosome`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ChromosomeCount {
-    /// The genome index (0..N_genomes).
     pub genome_index: u32,
-    /// The chromosome number (1..24 for human).
     pub chromosome: u8,
-    /// Records of this sequence landing in this (genome, chromosome) pair.
     pub count: u32,
 }
 
@@ -310,10 +289,6 @@ pub struct ProgressSnapshot {
     pub total_records:      u64,
     pub per_genome_records: Vec<u64>,
 }
-
-// ---------------------------------------------------------------------------
-// Orientation packing
-// ---------------------------------------------------------------------------
 
 #[inline]
 pub fn encode_orientation(c: char) -> u8 {

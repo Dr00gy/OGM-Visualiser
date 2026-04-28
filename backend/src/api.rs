@@ -45,19 +45,11 @@ pub struct CompleteFrame {
     pub distinct_sequence_count: u64,
 }
 
-// ---------------------------------------------------------------------------
-// Tunable limits
-// ---------------------------------------------------------------------------
-
 const MAX_RECORDS_PER_CHUNK: usize = 500;
 const MAX_GENOMES: usize = 3;
 const MAX_FILES_PER_GENOME: usize = 1000;
 const SESSION_TTL: Duration = Duration::from_secs(3600);
 const JANITOR_INTERVAL: Duration = Duration::from_secs(300);
-
-// ---------------------------------------------------------------------------
-// Session state
-// ---------------------------------------------------------------------------
 
 pub struct Session {
     staging_dir: PathBuf,
@@ -100,19 +92,12 @@ impl Drop for Session {
     }
 }
 
-/// Concurrent map from session UUID → [`Session`]. Wrapped in an `Arc` in
-/// [`AppState`] so every handler shares a single instance.
 pub type SessionStore = DashMap<Uuid, Session>;
 
-/// Shared state injected into every handler via `State<Arc<AppState>>`.
 pub struct AppState {
     pub cache: Arc<XmapCache>,
     pub sessions: Arc<SessionStore>,
 }
-
-// ---------------------------------------------------------------------------
-// Background janitor
-// ---------------------------------------------------------------------------
 
 pub fn spawn_session_janitor(sessions: Arc<SessionStore>) {
     tokio::spawn(async move {
@@ -134,18 +119,10 @@ pub fn spawn_session_janitor(sessions: Arc<SessionStore>) {
     });
 }
 
-// ---------------------------------------------------------------------------
-// Response types
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CreateSessionResponse {
     pub session_id: String,
 }
-
-// ---------------------------------------------------------------------------
-// Handlers
-// ---------------------------------------------------------------------------
 
 pub async fn create_session(
     State(state): State<Arc<AppState>>,
@@ -546,7 +523,6 @@ pub async fn stream_matches(
         const PROGRESS_INTERVAL: Duration = Duration::from_millis(500);
         const PROGRESS_EVERY_N_MATCHES: u64 = 1000;
 
-
         let mut writer_alive = true;
 
         async fn send_frame(
@@ -603,7 +579,7 @@ pub async fn stream_matches(
             std::collections::HashMap::new();
 
         let mut progress_ticker = tokio::time::interval(PROGRESS_INTERVAL);
-        progress_ticker.tick().await; // skip the immediate first tick
+        progress_ticker.tick().await; // skip immediate first tick
         let mut last_progress_matches: u64 = 0;
 
         loop {
@@ -735,9 +711,6 @@ pub async fn stream_matches(
                 }
             }
         } else {
-            // Session was deleted while we were ingesting (DELETE or
-            // janitor). The store we wrote to will be dropped when our
-            // Arc goes out of scope; nothing to do but log.
             eprintln!("[api] [stream {uuid}] session vanished during ingest");
         }
 
@@ -758,7 +731,6 @@ pub async fn stream_matches(
         }
     });
 
-    // Wrap the reader half as a streaming HTTP body.
     let stream = ReaderStream::new(reader);
     let body   = Body::from_stream(stream);
 
@@ -772,16 +744,8 @@ pub async fn stream_matches(
         .unwrap())
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Parse the multipart field name, which encodes the genome index and file kind.
-///
-/// Form: `g{genome_index}_r` for the refineFinal file, or
-/// `g{genome_index}_s{seq_index}` for an individual sequence (xmap) file.
-///
-/// Returns `(genome_index, is_refinefinal)` on success.
+/// Parse the multipart field name. Form is `g{gi}_r` for refineFinal or
+/// `g{gi}_s{si}` for sequence files. Returns `(genome_index, is_refinefinal)`.
 fn parse_field_name(field_name: &str) -> Option<(usize, bool)> {
     let s          = field_name.strip_prefix('g')?;
     let underscore = s.find('_')?;
@@ -825,7 +789,6 @@ mod tests {
         assert_eq!(parse_field_name("g0_x"), None);
         assert_eq!(parse_field_name("g0_sX"), None);
         assert_eq!(parse_field_name("0_r"), None);
-        // Old "c" prefix is no longer accepted.
         assert_eq!(parse_field_name("g0_c0"), None);
     }
 }

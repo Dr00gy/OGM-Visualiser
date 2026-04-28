@@ -82,7 +82,7 @@
       const oldId = sessId;
       void fetch(`http://localhost:8080/api/session/${oldId}`, {
         method: 'DELETE',
-      }).catch(() => { /* ignore cleanup failures */ });
+      }).catch(() => {});
       sessId = null;
     }
 
@@ -245,7 +245,7 @@
       if (sessId) {
         void fetch(`http://localhost:8080/api/session/${sessId}`, {
           method: 'DELETE',
-        }).catch(() => { /* ignore cleanup failures */ });
+        }).catch(() => {});
         sessId = null;
       }
     } finally {
@@ -276,7 +276,7 @@
     if (sessId) {
       void fetch(`http://localhost:8080/api/session/${sessId}`, {
         method: 'DELETE',
-      }).catch(() => { /* ignore cleanup failures */ });
+      }).catch(() => {});
       sessId = null;
     }
   }
@@ -415,11 +415,6 @@
 </main>
 
 <style>
-  /* ---------------------------------------------------------------------
-     Theme variables
-     ---------------------------------------------------------------------
-
-     --------------------------------------------------------------------- */
   :global(:root) {
     --bg-primary: #ffffff;
     --bg-secondary: #f9fafb;
@@ -466,9 +461,7 @@
     transition: background-color 0.2s, color 0.2s;
   }
 
-  /* ---------------------------------------------------------------------
-     Layout
-     --------------------------------------------------------------------- */
+  /* Layout */
   .page {
     padding: 2rem;
     max-width: 1400px;
@@ -492,9 +485,6 @@
   h1 { margin: 0;color: var(--text-primary);
   }
 
-  /* ---------------------------------------------------------------------
-     Reset / reupload button  outlined secondary
-     --------------------------------------------------------------------- */
   .reset-button {
     display: flex;
     gap: 0.5rem;
@@ -524,9 +514,6 @@
     to   { opacity: 1; transform: translateY(0); }
   }
 
-  /* ---------------------------------------------------------------------
-     Loading state (pre-stream)
-     --------------------------------------------------------------------- */
   .loading-container {
     display: flex;
     gap: 1rem;
@@ -543,9 +530,6 @@
     font-weight: 500;
   }
 
-  /* ---------------------------------------------------------------------
-     Streaming banner (during active ingestion)
-     --------------------------------------------------------------------- */
   .streaming-banner {
     display: flex;
     gap: 1rem;
@@ -611,9 +595,6 @@
     font-weight: 600;
   }
 
-  /* ---------------------------------------------------------------------
-     Placeholder (empty analysis tab)
-     --------------------------------------------------------------------- */
   .placeholder-tab {
     text-align: center;
     padding: 4rem;

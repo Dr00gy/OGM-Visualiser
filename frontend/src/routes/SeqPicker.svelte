@@ -1,18 +1,10 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
 
-  // -------------------------------------------------------------------------
-  // Props
-  // -------------------------------------------------------------------------
-
   export let options: number[] = [];
   export let value: string = '';
   export let id: string = 'seq-picker';
   export let placeholder: string = 'Type or pick a sequence ID…';
-
-  // -------------------------------------------------------------------------
-  // Internal state
-  // -------------------------------------------------------------------------
 
   let inText: string = value;
   let dropOpen: boolean = false;
@@ -24,10 +16,7 @@
   const SCROLL_H = 280;
   const WIN_SIZE = Math.ceil(SCROLL_H / ITEM_H) * 3;
 
-  // -------------------------------------------------------------------------
-  // Keep input synced when `value` changes from outside
-  // -------------------------------------------------------------------------
-
+  // Sync input when `value` changes externally (and the input isn't focused).
   $: if (typeof document !== 'undefined' &&
          value !== inText &&
          document.activeElement !== inputRef) {
@@ -35,10 +24,6 @@
   }
 
   let inputRef: HTMLInputElement | null = null;
-
-  // -------------------------------------------------------------------------
-  // Filtering
-  // -------------------------------------------------------------------------
 
   $: filtered = (() => {
     const q = inText.trim();
@@ -65,10 +50,7 @@
     return prefix;
   })();
 
-  // -------------------------------------------------------------------------
   // Virtualization windowing
-  // -------------------------------------------------------------------------
-
   $: winStart = (() => {
     const vpFirst = Math.floor(scrollTop / ITEM_H);
     const pad = Math.floor((WIN_SIZE - SCROLL_H / ITEM_H) / 2);
@@ -78,10 +60,6 @@
   $: winItems = filtered.slice(winStart, winStart + WIN_SIZE);
   $: totH = filtered.length * ITEM_H;
   $: winOff = winStart * ITEM_H;
-
-  // -------------------------------------------------------------------------
-  // Handlers
-  // -------------------------------------------------------------------------
 
   function onInFocus() {
     dropOpen = true;

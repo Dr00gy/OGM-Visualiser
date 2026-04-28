@@ -47,10 +47,6 @@ export type StreamFrame =
   | { type: 'progress';       progress:       ProgressFrame      }
   | { type: 'complete';       complete:       CompleteFrame      };
 
-// ---------------------------------------------------------------------------
-// ByteReader: forward-only reader over a Uint8Array
-// ---------------------------------------------------------------------------
-
 class ByteReader {
   private data: Uint8Array;
   private view: DataView;
@@ -101,10 +97,6 @@ class ByteReader {
   remaining(): number { return this.data.length - this.pos; }
   getPos(): number    { return this.pos; }
 }
-
-// ---------------------------------------------------------------------------
-// Per-variant decoders
-// ---------------------------------------------------------------------------
 
 function decChrInfoVec(rd: ByteReader): ChromosomeInfo[] {
   const len = Number(rd.readU64());
@@ -171,10 +163,6 @@ function decStreamFrame(bytes: Uint8Array): StreamFrame {
       throw new Error(`Unknown StreamFrame variant index: ${variant}`);
   }
 }
-
-// ---------------------------------------------------------------------------
-// Streaming decoder (public entry point)
-// ---------------------------------------------------------------------------
 
 export async function* processMatchStream(
   resp: Response
@@ -257,10 +245,6 @@ export async function* processMatchStream(
     rd.releaseLock();
   }
 }
-
-// ---------------------------------------------------------------------------
-// Test hooks — internal, not for application use.
-// ---------------------------------------------------------------------------
 
 export const __testUtils = {
   decStreamFrame,

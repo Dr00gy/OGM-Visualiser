@@ -1,15 +1,13 @@
 import { writable } from 'svelte/store';
 
 interface SearchState {
-  /** Text typed into the donut overview list's search box. */
+  /** Donut overview list search box. */
   ovQry: string;
-  /** Text typed into the donut match-table's search box. */
+  /** Donut match-table search box. */
   mtcQry: string;
-  /** Text typed into the area-analysis tab's search box. */
+  /** Area-analysis search box. */
   areaQry: string;
-  /** Which field the overview search is being applied to. */
   ovType: 'sequence' | 'chromosome' | 'confidence';
-  /** Which field the match-table search is being applied to. */
   mtcType: 'sequence' | 'chromosome' | 'confidence';
 }
 

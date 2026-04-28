@@ -4,10 +4,7 @@ export interface FileData {
   color: string;
 }
 
-// ---------------------------------------------------------------------------
-// Wire-format records (mirror of bincodeDecoder equivalents).
-// Field names match the BE Rust serialization byte-for-byte / key-for-key.
-// ---------------------------------------------------------------------------
+// Wire-format records — field names match the Rust serialization exactly.
 
 export interface MatchedRecord {
   file_index: number;
@@ -27,9 +24,7 @@ export interface BackendMatch {
   records: MatchedRecord[];
 }
 
-// ---------------------------------------------------------------------------
-// Donut-chart geometry types (FE-only, derived from the above)
-// ---------------------------------------------------------------------------
+// Donut-chart geometry types (frontend-only, derived).
 
 export interface DonutSeg {
   name: string;

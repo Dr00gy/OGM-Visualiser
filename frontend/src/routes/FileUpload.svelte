@@ -2,8 +2,6 @@
   import { createEventDispatcher } from 'svelte';
   const dispatch = createEventDispatcher();
   const REFINEFINAL_NAME = 'exp_refineFinal1.xmap';
-  // The Bionano OGM toolchain produces folders literally named `contigs`,
-  // so this filesystem path is a fixed external convention — not renamed.
   const CONTIG_PATH = ['assembly', 'output', 'contigs', 'exp_refineFinal1', 'alignmol', 'merge'];
 
   interface GenZone {

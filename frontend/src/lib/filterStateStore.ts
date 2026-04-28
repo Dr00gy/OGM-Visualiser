@@ -1,12 +1,8 @@
 import { writable } from 'svelte/store';
 import { browser } from '$app/environment';
 
-// ---------------------------------------------------------------------------
-// Donut tab
-// ---------------------------------------------------------------------------
-
 export interface DonutFltState {
-  /** Selected query sequence id (as string; '' = no filter). */
+  /** Selected query sequence id ('' = no filter). */
   selSeqId: string;
   selGen1: string;
   selGen2: string;
@@ -16,24 +12,20 @@ export interface DonutFltState {
   selGenForChr: string;
   /** Render intra-genome flows instead of cross-genome ones. */
   showDups: boolean;
-  /** Donut zoom scale (1.0 = default). */
+  /** Donut zoom scale. */
   scale: number;
 }
 
-// ---------------------------------------------------------------------------
-// Area-analysis tab
-// ---------------------------------------------------------------------------
-
 export interface AreaFltState {
-  /** Selected GENOME indices. */
+  /** Selected genome indices. */
   selFiles: number[];
-  /** Chromosome currently being inspected (1..24). */
+  /** Chromosome being inspected (1..24). */
   selChr: number;
-  /** Window size in base pairs. Default 100 kb. */
+  /** Window size in base pairs. */
   winSize: number;
-  /** Zero-based index of the currently-displayed window. */
+  /** Zero-based index of the displayed window. */
   curWinIdx: number;
-  /** text in the search box. */
+  /** Search box text. */
   qry: string;
 }
 

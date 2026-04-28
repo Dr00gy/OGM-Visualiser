@@ -13,10 +13,6 @@
   } from '$lib/queryClient';
   import DonutInfo from './DonutInfo.svelte';
 
-  // ---------------------------------------------------------------------
-  // Props
-  // ---------------------------------------------------------------------
-
   export let files: FileData[] = [];
   export let fileToGen: number[] = [];
 
@@ -33,10 +29,6 @@
   function gi(fileIdx: number): number {
     return fileToGen[fileIdx] ?? 0;
   }
-
-  // ---------------------------------------------------------------------
-  // DOM refs and zoom/pan state
-  // ---------------------------------------------------------------------
 
   let svgEl: SVGSVGElement;
   let containerEl: HTMLDivElement;
@@ -129,9 +121,6 @@
   $: availGens = files.map((f, i) => ({ value: i.toString(), label: f.name, color: f.color }));
   $: availChrs = Array.from({ length: 24 }, (_, i) => (i + 1).toString());
 
-  // ---------------------------------------------------------------------
-  // Geometry: reactive constants the layout depends on.
-  // ---------------------------------------------------------------------
   $: cx = 200;
   $: cy = 200;
   $: baseR = 80;
@@ -194,7 +183,7 @@
     const avgConf = (wf.from_confidence + wf.to_confidence) / 2;
     const norm = avgConf / maxConf;
     return {
-      fromFileIdx: wf.from_genome,      // naming kept for compatibility
+      fromFileIdx: wf.from_genome,
       fromChr: wf.from_chromosome,
       toFileIdx: wf.to_genome,
       toChr: wf.to_chromosome,
@@ -343,9 +332,6 @@
     return nodes;
   })();
 
-  // ---------------------------------------------------------------------
-  // D3 state: persistent references to the layered SVG groups.
-  // ---------------------------------------------------------------------
   let mainGroup: d3.Selection<SVGGElement, unknown, null, undefined>;
   let flowsLayer: d3.Selection<SVGGElement, unknown, null, undefined>;
   let donutLayer: d3.Selection<SVGGElement, unknown, null, undefined>;
@@ -402,7 +388,6 @@
       off += (s.angRange / 360) * circumference;
     });
 
-    // -------- Donut ring segments --------
     donutLayer
       .selectAll('circle.segment')
       .data(segments, (d: any) => d.idx)
@@ -566,10 +551,6 @@
       mainGroup.attr('transform', `translate(0,0) scale(1)`);
     }
   }
-
-  // ---------------------------------------------------------------------
-  // Lifecycle hooks
-  // ---------------------------------------------------------------------
 
   afterUpdate(() => {
     if (!isInit && chrInfo.length > 0 && files.length > 0) {

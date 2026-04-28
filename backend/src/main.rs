@@ -102,7 +102,7 @@ async fn main() {
         .route(
             "/api/upload/{session_id}",
             post(api::upload_file)
-                .layer(DefaultBodyLimit::max(4 * 1024 * 1024 * 1024)), // 4 GiB
+                .layer(DefaultBodyLimit::max(4 * 1024 * 1024 * 1024)), // 4 GiB per file
         )
         .route("/api/match/{session_id}", post(api::stream_matches))
         .route("/api/session/{session_id}", delete(api::delete_session))
