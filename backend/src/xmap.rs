@@ -4,7 +4,8 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
+use std::hash::Hasher;
+use std::time::Instant;
 use serde::{Deserialize, Serialize};
 use dashmap::DashMap;
 use crossbeam::channel;
@@ -134,10 +135,30 @@ pub fn parse_xmap_disk(
 
     qry_ids.shrink_to_fit();
     let arc = Arc::new(qry_ids);
-    cache.parsed_files.insert(hash, Arc::clone(&arc));
+    cache.insert_xmap(hash, Arc::clone(&arc));
     Ok(arc)
 }
 
+/// Parse a refineFinal and store the result in the cache, returning the same
+/// `Arc` we'd hand out on a hit.
+pub fn parse_refinefinal_cached(
+    path: &Path,
+    hash: u64,
+    cache: &XmapCache,
+) -> Result<Arc<RefineFinalParsed>, String> {
+    let (lookup, chr_lengths) = parse_refinefinal(path)?;
+    let arc = Arc::new(RefineFinalParsed {
+        lookup: Arc::new(lookup),
+        chr_lengths,
+    });
+    cache.insert_refinefinal(hash, Arc::clone(&arc));
+    Ok(arc)
+}
+
+/// Hash a file's contents. Uses `Hasher::write` directly (rather than
+/// `[u8]::hash`, which prefixes the slice length) so the result is independent
+/// of how many bytes are read per `read()` call. This must match what
+/// `StreamHasher` does on the upload path so cache lookups hit.
 pub fn hash_file(path: &Path) -> Result<u64, std::io::Error> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
@@ -146,19 +167,124 @@ pub fn hash_file(path: &Path) -> Result<u64, std::io::Error> {
     loop {
         let n = reader.read(&mut buffer)?;
         if n == 0 { break; }
-        buffer[..n].hash(&mut hasher);
+        hasher.write(&buffer[..n]);
     }
     Ok(hasher.finish())
 }
 
+/// Streaming wrapper around `DefaultHasher` so we can compute the same hash
+/// while writing the upload to disk. Uses `Hasher::write` so chunk boundaries
+/// don't influence the result — `update(b"hello")` and
+/// `update(b"hel"); update(b"lo")` produce the same hash.
+#[derive(Default)]
+pub struct StreamHasher {
+    inner: DefaultHasher,
+}
+
+impl StreamHasher {
+    pub fn new() -> Self { Self { inner: DefaultHasher::new() } }
+    pub fn update(&mut self, bytes: &[u8]) { self.inner.write(bytes); }
+    pub fn finish(self) -> u64 { self.inner.finish() }
+}
+
+/// Cached parsed refineFinal: the qry-keyed lookup the matcher uses, plus the
+/// per-chromosome reference lengths we surface in the first stream frame.
+pub struct RefineFinalParsed {
+    /// Wrapped in `Arc` so we can hand a clone to the matcher's `XmapFileSet`
+    /// without copying the whole HashMap on a cache hit.
+    pub lookup: Arc<HashMap<u32, Vec<RefineFinalRecord>>>,
+    pub chr_lengths: HashMap<u8, f64>,
+}
+
+/// A cache entry that records when it was last touched. Touched means inserted
+/// or read; the janitor evicts entries whose `last_touched` exceeds a TTL.
+struct CacheEntry<T> {
+    value: Arc<T>,
+    last_touched: std::sync::Mutex<Instant>,
+}
+
+impl<T> CacheEntry<T> {
+    fn new(value: Arc<T>) -> Self {
+        Self {
+            value,
+            last_touched: std::sync::Mutex::new(Instant::now()),
+        }
+    }
+    fn touch(&self) {
+        if let Ok(mut g) = self.last_touched.lock() { *g = Instant::now(); }
+    }
+    fn age(&self) -> std::time::Duration {
+        self.last_touched
+            .lock()
+            .map(|g| g.elapsed())
+            .unwrap_or_default()
+    }
+}
+
+/// Process-wide cache for parsed xmap and refineFinal files. Entries live for
+/// `XmapCache::TTL` past their last access; the janitor (in `api.rs`) sweeps
+/// expired entries periodically. Sharing across sessions is intentional —
+/// content-hash keys mean two users uploading the same file get the same
+/// parsed `Arc`.
 pub struct XmapCache {
-    pub parsed_files: Arc<DashMap<u64, Arc<XmapQryIds>>>,
+    parsed_files: DashMap<u64, CacheEntry<XmapQryIds>>,
+    parsed_refinefinals: DashMap<u64, CacheEntry<RefineFinalParsed>>,
 }
 
 impl XmapCache {
+    pub const TTL: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
     pub fn new() -> Self {
-        Self { parsed_files: Arc::new(DashMap::new()) }
+        Self {
+            parsed_files: DashMap::new(),
+            parsed_refinefinals: DashMap::new(),
+        }
     }
+
+    pub fn get_xmap(&self, hash: u64) -> Option<Arc<XmapQryIds>> {
+        let entry = self.parsed_files.get(&hash)?;
+        entry.touch();
+        Some(Arc::clone(&entry.value))
+    }
+
+    pub fn insert_xmap(&self, hash: u64, value: Arc<XmapQryIds>) {
+        self.parsed_files.insert(hash, CacheEntry::new(value));
+    }
+
+    pub fn get_refinefinal(&self, hash: u64) -> Option<Arc<RefineFinalParsed>> {
+        let entry = self.parsed_refinefinals.get(&hash)?;
+        entry.touch();
+        Some(Arc::clone(&entry.value))
+    }
+
+    pub fn insert_refinefinal(&self, hash: u64, value: Arc<RefineFinalParsed>) {
+        self.parsed_refinefinals.insert(hash, CacheEntry::new(value));
+    }
+
+    /// Remove entries whose `last_touched` exceeds `Self::TTL`. Returns
+    /// `(xmap_evicted, refinefinal_evicted)` for logging.
+    pub fn evict_expired(&self) -> (usize, usize) {
+        let xmap_keys: Vec<u64> = self
+            .parsed_files
+            .iter()
+            .filter(|e| e.value().age() > Self::TTL)
+            .map(|e| *e.key())
+            .collect();
+        for k in &xmap_keys { self.parsed_files.remove(k); }
+
+        let rf_keys: Vec<u64> = self
+            .parsed_refinefinals
+            .iter()
+            .filter(|e| e.value().age() > Self::TTL)
+            .map(|e| *e.key())
+            .collect();
+        for k in &rf_keys { self.parsed_refinefinals.remove(k); }
+
+        (xmap_keys.len(), rf_keys.len())
+    }
+
+    pub fn len_xmap(&self) -> usize { self.parsed_files.len() }
+    pub fn len_refinefinal(&self) -> usize { self.parsed_refinefinals.len() }
 }
 
 pub struct XmapFileSet {
@@ -287,9 +413,55 @@ mod tests {
     }
 
     #[test]
+    fn xmap_cache_hits_after_parse() {
+        let temp = write_temp(sample_xmap());
+        let cache = XmapCache::new();
+        let h = hash_file(temp.path()).unwrap();
+        assert!(cache.get_xmap(h).is_none());
+
+        let parsed = parse_xmap_disk(temp.path(), h, &cache).unwrap();
+        let cached = cache.get_xmap(h).expect("expected cache hit");
+        assert!(Arc::ptr_eq(&parsed, &cached));
+    }
+
+    #[test]
+    fn cache_evict_expired_drops_entries_past_ttl() {
+        let cache = XmapCache::new();
+        cache.insert_xmap(7, Arc::new(vec![1u32, 2, 3]));
+        assert_eq!(cache.len_xmap(), 1);
+
+        // Force the entry's last_touched into the past.
+        if let Some(e) = cache.parsed_files.get(&7) {
+            *e.value().last_touched.lock().unwrap() =
+                Instant::now() - (XmapCache::TTL + std::time::Duration::from_secs(1));
+        }
+        let (n_xmap, n_rf) = cache.evict_expired();
+        assert_eq!((n_xmap, n_rf), (1, 0));
+        assert_eq!(cache.len_xmap(), 0);
+    }
+
+    #[test]
     fn hash_file_is_stable() {
         let temp = write_temp("test content");
         assert_eq!(hash_file(temp.path()).unwrap(), hash_file(temp.path()).unwrap());
+    }
+
+    #[test]
+    fn stream_hasher_matches_hash_file_irrespective_of_chunking() {
+        let payload = b"the quick brown fox jumps over the lazy dog 1234567890".repeat(1000);
+        let temp = write_temp(std::str::from_utf8(&payload).unwrap());
+        let disk = hash_file(temp.path()).unwrap();
+
+        // Hash the same bytes in arbitrarily-sized chunks.
+        let mut h = StreamHasher::new();
+        let mut i = 0;
+        for chunk_size in [1, 17, 4096, 7, 8191, 1].iter().cycle() {
+            if i >= payload.len() { break; }
+            let end = (i + *chunk_size).min(payload.len());
+            h.update(&payload[i..end]);
+            i = end;
+        }
+        assert_eq!(disk, h.finish());
     }
 
     #[test]

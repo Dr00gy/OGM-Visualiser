@@ -48,7 +48,7 @@ async fn main() {
         sessions: Arc::new(api::SessionStore::new()),
     });
 
-    api::spawn_session_janitor(Arc::clone(&state.sessions));
+    api::spawn_session_janitor(Arc::clone(&state.sessions), Arc::clone(&state.cache));
 
     // Permissive CORS for the Vite dev server.
     let cors = CorsLayer::new()

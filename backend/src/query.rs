@@ -4,7 +4,7 @@ use axum::{
     body::Body,
     extract::{Path as AxumPath, Query, State},
     http::{header, StatusCode},
-    response::{IntoResponse, Json, Response},
+    response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -116,16 +116,17 @@ pub struct MetaResponse {
 pub async fn get_meta(
     State(state): State<Arc<AppState>>,
     AxumPath(session_id): AxumPath<String>,
-) -> Result<Json<MetaResponse>, StatusCode> {
+) -> Result<Response, StatusCode> {
     let (store, file_to_genome) = resolve_session(&state, &session_id)?;
     let snap = store.snapshot();
-    Ok(Json(MetaResponse {
+    let meta = MetaResponse {
         max_confidence: store.max_confidence(),
         available_sequence_ids: store.available_sequence_ids(),
         file_to_genome: file_to_genome.into_iter().map(|g| g as u32).collect(),
         total_matches: snap.total_matches,
         total_records: snap.total_records,
-    }))
+    };
+    framed_bincode(&meta)
 }
 
 // ---------------------------------------------------------------------------
@@ -142,7 +143,7 @@ pub async fn get_sequences(
     State(state): State<Arc<AppState>>,
     AxumPath(session_id): AxumPath<String>,
     Query(params): Query<PageQuery>,
-) -> Result<Json<SequencesPage>, StatusCode> {
+) -> Result<Response, StatusCode> {
     let (store, _) = resolve_session(&state, &session_id)?;
     let (start, per_page) = page_bounds(params.page, params.per_page);
     let needle = params.q.to_ascii_lowercase();
@@ -151,7 +152,7 @@ pub async fn get_sequences(
         matches_filter(agg, &params.search_type, &needle, true)
     });
 
-    Ok(Json(SequencesPage { total, items }))
+    framed_bincode(&SequencesPage { total, items })
 }
 
 // ---------------------------------------------------------------------------
@@ -189,7 +190,7 @@ pub async fn get_matches(
     State(state): State<Arc<AppState>>,
     AxumPath(session_id): AxumPath<String>,
     Query(params): Query<PageQuery>,
-) -> Result<Json<MatchesPage>, StatusCode> {
+) -> Result<Response, StatusCode> {
     let (store, _) = resolve_session(&state, &session_id)?;
     let (start, per_page) = page_bounds(params.page, params.per_page);
     let needle = params.q.to_ascii_lowercase();
@@ -199,7 +200,7 @@ pub async fn get_matches(
     });
 
     if page_aggs.is_empty() {
-        return Ok(Json(MatchesPage { total, items: Vec::new() }));
+        return framed_bincode(&MatchesPage { total, items: Vec::new() });
     }
 
     let page_sequence_ids: Vec<u32> = page_aggs.iter().map(|a| a.qry_contig_id).collect();
@@ -253,7 +254,7 @@ pub async fn get_matches(
         out
     });
 
-    Ok(Json(MatchesPage { total, items }))
+    framed_bincode(&MatchesPage { total, items })
 }
 
 // ---------------------------------------------------------------------------
@@ -393,7 +394,7 @@ pub async fn get_sequence_locations(
     State(state): State<Arc<AppState>>,
     AxumPath(session_id): AxumPath<String>,
     Query(params): Query<SequenceLocationsQuery>,
-) -> Result<Json<SequenceLocationsResponse>, StatusCode> {
+) -> Result<Response, StatusCode> {
     let (store, file_to_genome) = resolve_session(&state, &session_id)?;
     let want = params.qry;
     let genome_filter = parse_genome_csv(params.genomes.as_deref());
@@ -417,7 +418,7 @@ pub async fn get_sequence_locations(
         out
     });
 
-    Ok(Json(SequenceLocationsResponse { qry_contig_id: want, locations }))
+    framed_bincode(&SequenceLocationsResponse { qry_contig_id: want, locations })
 }
 
 // ---------------------------------------------------------------------------

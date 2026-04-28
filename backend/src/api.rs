@@ -18,8 +18,8 @@ use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 use crate::xmap::{
-    XmapCache, XmapFileSet, parse_xmap_disk, parse_refinefinal,
-    hash_file, ChromosomeInfo, RefineFinalRecord,
+    XmapCache, XmapFileSet, parse_xmap_disk, parse_refinefinal_cached,
+    ChromosomeInfo, StreamHasher,
 };
 use crate::store::MatchStore;
 
@@ -52,10 +52,19 @@ const JANITOR_INTERVAL: Duration = Duration::from_secs(300);
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(500);
 const PROGRESS_EVERY_N_MATCHES: u64 = 1000;
 
+/// One uploaded file: where it lives on disk and the content hash we computed
+/// while streaming the upload. The hash is the cache key for both the xmap
+/// qry-id vector and the refineFinal lookup.
+#[derive(Debug, Clone)]
+pub struct StagedFile {
+    pub path: PathBuf,
+    pub hash: u64,
+}
+
 pub struct Session {
     staging_dir: PathBuf,
-    genome_sequence_files: [Vec<PathBuf>; MAX_GENOMES],
-    genome_refinefinal: [Option<PathBuf>; MAX_GENOMES],
+    genome_sequence_files: [Vec<StagedFile>; MAX_GENOMES],
+    genome_refinefinal: [Option<StagedFile>; MAX_GENOMES],
     pub last_touched: Instant,
     pub store: Arc<MatchStore>,
     pub file_to_genome: Option<Vec<usize>>,
@@ -98,7 +107,7 @@ pub struct AppState {
     pub sessions: Arc<SessionStore>,
 }
 
-pub fn spawn_session_janitor(sessions: Arc<SessionStore>) {
+pub fn spawn_session_janitor(sessions: Arc<SessionStore>, cache: Arc<XmapCache>) {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(JANITOR_INTERVAL);
         ticker.tick().await;
@@ -113,6 +122,15 @@ pub fn spawn_session_janitor(sessions: Arc<SessionStore>) {
             for id in expired {
                 eprintln!("[janitor] evicting expired session {id}");
                 sessions.remove(&id);
+            }
+
+            let (n_xmap, n_rf) = cache.evict_expired();
+            if n_xmap > 0 || n_rf > 0 {
+                eprintln!(
+                    "[janitor] evicted {n_xmap} xmap and {n_rf} refineFinal cache entries; \
+                     remaining xmap={}, refineFinal={}",
+                    cache.len_xmap(), cache.len_refinefinal()
+                );
             }
         }
     });
@@ -208,12 +226,14 @@ pub async fn upload_file(
     let mut stream = field;
     let mut bytes_written: u64 = 0;
     let mut last_log = Instant::now();
+    let mut hasher = StreamHasher::new();
     while let Some(chunk) = stream.chunk().await.map_err(|e| {
         eprintln!(
             "[api] !!! upload: field.chunk() error on '{field_name}' after {bytes_written} bytes: {e:?}"
         );
         StatusCode::BAD_REQUEST
     })? {
+        hasher.update(&chunk);
         file.write_all(&chunk).await.map_err(|e| {
             eprintln!("[api] !!! upload: write_all error on '{field_name}': {e:?}");
             StatusCode::INTERNAL_SERVER_ERROR
@@ -232,9 +252,10 @@ pub async fn upload_file(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
     drop(file);
+    let content_hash = hasher.finish();
 
     eprintln!(
-        "[api] [session {uuid}] '{field_name}' uploaded: {bytes_written} bytes in {:?}",
+        "[api] [session {uuid}] '{field_name}' uploaded: {bytes_written} bytes (hash {content_hash:016x}) in {:?}",
         upload_start.elapsed()
     );
 
@@ -246,8 +267,9 @@ pub async fn upload_file(
         StatusCode::NOT_FOUND
     })?;
 
+    let staged = StagedFile { path: temp_path, hash: content_hash };
     if is_refinefinal {
-        session.genome_refinefinal[genome_index] = Some(temp_path);
+        session.genome_refinefinal[genome_index] = Some(staged);
     } else {
         if session.genome_sequence_files[genome_index].len() >= MAX_FILES_PER_GENOME {
             eprintln!(
@@ -255,7 +277,7 @@ pub async fn upload_file(
             );
             return Err(StatusCode::BAD_REQUEST);
         }
-        session.genome_sequence_files[genome_index].push(temp_path);
+        session.genome_sequence_files[genome_index].push(staged);
     }
     session.touch();
 
@@ -285,9 +307,9 @@ pub async fn stream_matches(
             return Err(StatusCode::CONFLICT);
         }
 
-        let sequences: Vec<Vec<PathBuf>> =
+        let sequences: Vec<Vec<StagedFile>> =
             std::mem::take(&mut entry.genome_sequence_files).into_iter().collect();
-        let refinefinals: Vec<Option<PathBuf>> =
+        let refinefinals: Vec<Option<StagedFile>> =
             std::mem::take(&mut entry.genome_refinefinal).into_iter().collect();
         let store = Arc::clone(&entry.store);
         entry.touch();
@@ -319,35 +341,45 @@ pub async fn stream_matches(
         }
     }
 
-    // Parse refineFinals.
+    // Parse refineFinals — hit the cache first, parse on miss.
     let mut refinefinal_lookups = Vec::new();
     let mut chromosome_info_per_genome: Vec<Vec<ChromosomeInfo>> = Vec::new();
 
     for &gi in &populated_genomes {
-        let rf_path = genome_refinefinal[gi].take().unwrap();
-        let (lookup, chr_lengths) = tokio::task::spawn_blocking(move || {
-            parse_refinefinal(&rf_path)
-        })
-            .await
-            .map_err(|e| {
-                eprintln!("[api] !!! refineFinal join error for genome {gi}: {e:?}");
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?
-            .map_err(|e| {
-                eprintln!("[api] !!! refineFinal parse error for genome {gi}: {e:?}");
-                StatusCode::BAD_REQUEST
-            })?;
+        let rf_staged = genome_refinefinal[gi].take().unwrap();
+        let rf_hash = rf_staged.hash;
 
-        let chr_info: Vec<ChromosomeInfo> = chr_lengths
-            .into_iter()
-            .map(|(ref_contig_id, ref_len)| ChromosomeInfo { ref_contig_id, ref_len })
+        let parsed = if let Some(cached) = state.cache.get_refinefinal(rf_hash) {
+            eprintln!("[api] [cache] refineFinal hit for genome {gi} (hash {rf_hash:016x})");
+            cached
+        } else {
+            eprintln!("[api] [cache] refineFinal miss for genome {gi} (hash {rf_hash:016x})");
+            let cache = Arc::clone(&state.cache);
+            tokio::task::spawn_blocking(move || {
+                parse_refinefinal_cached(&rf_staged.path, rf_hash, &cache)
+            })
+                .await
+                .map_err(|e| {
+                    eprintln!("[api] !!! refineFinal join error for genome {gi}: {e:?}");
+                    StatusCode::INTERNAL_SERVER_ERROR
+                })?
+                .map_err(|e| {
+                    eprintln!("[api] !!! refineFinal parse error for genome {gi}: {e:?}");
+                    StatusCode::BAD_REQUEST
+                })?
+        };
+
+        let chr_info: Vec<ChromosomeInfo> = parsed.chr_lengths
+            .iter()
+            .map(|(&ref_contig_id, &ref_len)| ChromosomeInfo { ref_contig_id, ref_len })
             .collect();
 
         chromosome_info_per_genome.push(chr_info);
-        refinefinal_lookups.push(Arc::new(lookup));
+        // Share the cached HashMap with the matcher — no copy on a cache hit.
+        refinefinal_lookups.push(Arc::clone(&parsed.lookup));
     }
 
-    // Parse sequence (xmap) files; cache by hash.
+    // Parse sequence (xmap) files; the hash was computed at upload time.
     let total_sequence_files: usize = populated_genomes
         .iter()
         .map(|&gi| genome_sequence_files[gi].len())
@@ -358,26 +390,16 @@ pub async fn stream_matches(
     let mut file_to_genome: Vec<usize> = Vec::new();
 
     for (genome_order_idx, &gi) in populated_genomes.iter().enumerate() {
-        for temp_path in &genome_sequence_files[gi] {
-            let hash = {
-                let path = temp_path.clone();
-                tokio::task::spawn_blocking(move || hash_file(&path))
-                    .await
-                    .map_err(|e| {
-                        eprintln!("[api] !!! hash join error: {e:?}");
-                        StatusCode::INTERNAL_SERVER_ERROR
-                    })?
-                    .map_err(|e| {
-                        eprintln!("[api] !!! hash_file error: {e:?}");
-                        StatusCode::INTERNAL_SERVER_ERROR
-                    })?
-            };
+        for staged in &genome_sequence_files[gi] {
+            let hash = staged.hash;
 
-            let qrys = if let Some(r) = state.cache.parsed_files.get(&hash) {
-                Arc::clone(r.value())
+            let qrys = if let Some(cached) = state.cache.get_xmap(hash) {
+                eprintln!("[api] [cache] xmap hit (hash {hash:016x})");
+                cached
             } else {
+                eprintln!("[api] [cache] xmap miss (hash {hash:016x})");
                 let cache = Arc::clone(&state.cache);
-                let path = temp_path.clone();
+                let path = staged.path.clone();
                 tokio::task::spawn_blocking(move || parse_xmap_disk(&path, hash, &cache))
                     .await
                     .map_err(|e| {

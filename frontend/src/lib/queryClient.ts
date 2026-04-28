@@ -66,17 +66,6 @@ function isAbort(err: unknown): boolean {
   return err instanceof DOMException && err.name === 'AbortError';
 }
 
-async function fetchJSON<T>(url: string, signal?: AbortSignal): Promise<T | undefined> {
-  try {
-    const resp = await fetch(url, { signal });
-    if (!resp.ok) throw new QueryError(resp.status, resp.statusText);
-    return (await resp.json()) as T;
-  } catch (err) {
-    if (isAbort(err)) return undefined;
-    throw err;
-  }
-}
-
 async function fetchBincode(url: string, signal?: AbortSignal): Promise<Uint8Array | undefined> {
   try {
     const resp = await fetch(url, { signal });
@@ -108,11 +97,42 @@ function qs(params: Record<string, string | number | boolean | undefined | null>
 // Public endpoint wrappers
 // ---------------------------------------------------------------------------
 
-export function fetchMeta(
+export async function fetchMeta(
   sessId: string,
   signal?: AbortSignal,
 ): Promise<MetaResponse | undefined> {
-  return fetchJSON<MetaResponse>(`${BASE}/api/session/${sessId}/meta`, signal);
+  const bytes = await fetchBincode(`${BASE}/api/session/${sessId}/meta`, signal);
+  return bytes ? decMeta(bytes) : undefined;
+}
+
+/**
+ * Wire layout: max_confidence f64, available_sequence_ids Vec<u32>,
+ * file_to_genome Vec<u32>, total_matches u64, total_records u64.
+ */
+function decMeta(bytes: Uint8Array): MetaResponse {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let pos = 0;
+
+  const max_confidence = view.getFloat64(pos, true); pos += 8;
+
+  const idsLen = Number(view.getBigUint64(pos, true)); pos += 8;
+  const available_sequence_ids: number[] = new Array(idsLen);
+  for (let i = 0; i < idsLen; i++) {
+    available_sequence_ids[i] = view.getUint32(pos, true);
+    pos += 4;
+  }
+
+  const ftgLen = Number(view.getBigUint64(pos, true)); pos += 8;
+  const file_to_genome: number[] = new Array(ftgLen);
+  for (let i = 0; i < ftgLen; i++) {
+    file_to_genome[i] = view.getUint32(pos, true);
+    pos += 4;
+  }
+
+  const total_matches = Number(view.getBigUint64(pos, true)); pos += 8;
+  const total_records = Number(view.getBigUint64(pos, true)); pos += 8;
+
+  return { max_confidence, available_sequence_ids, file_to_genome, total_matches, total_records };
 }
 
 interface PageOpts {
@@ -132,15 +152,123 @@ function pageQs(opts: PageOpts): string {
   });
 }
 
-export function fetchSeqs(sessId: string, opts: PageOpts = {}): Promise<SeqsPage | undefined> {
-  return fetchJSON<SeqsPage>(`${BASE}/api/session/${sessId}/sequences${pageQs(opts)}`, opts.signal);
+export async function fetchSeqs(
+  sessId: string,
+  opts: PageOpts = {},
+): Promise<SeqsPage | undefined> {
+  const bytes = await fetchBincode(
+    `${BASE}/api/session/${sessId}/sequences${pageQs(opts)}`,
+    opts.signal,
+  );
+  return bytes ? decSeqsPage(bytes) : undefined;
 }
 
-export function fetchMatchesPage(
+export async function fetchMatchesPage(
   sessId: string,
   opts: PageOpts = {},
 ): Promise<MatchesPage | undefined> {
-  return fetchJSON<MatchesPage>(`${BASE}/api/session/${sessId}/matches${pageQs(opts)}`, opts.signal);
+  const bytes = await fetchBincode(
+    `${BASE}/api/session/${sessId}/matches${pageQs(opts)}`,
+    opts.signal,
+  );
+  return bytes ? decMatchesPage(bytes) : undefined;
+}
+
+/**
+ * SequencesPage wire layout:
+ *   total u64, items Vec<SequenceAggregate>.
+ * SequenceAggregate:
+ *   qry_contig_id u32, total_occurrences u32,
+ *   per_genome Vec<u32>,
+ *   per_chromosome Vec<ChromosomeCount> (each: u32, u8, u32),
+ *   max_confidence f64.
+ */
+function decSeqsPage(bytes: Uint8Array): SeqsPage {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let pos = 0;
+
+  const total = Number(view.getBigUint64(pos, true)); pos += 8;
+  const itemsLen = Number(view.getBigUint64(pos, true)); pos += 8;
+
+  const items: SequenceAggregate[] = new Array(itemsLen);
+  for (let i = 0; i < itemsLen; i++) {
+    const qry_contig_id     = view.getUint32(pos, true); pos += 4;
+    const total_occurrences = view.getUint32(pos, true); pos += 4;
+
+    const pgLen = Number(view.getBigUint64(pos, true)); pos += 8;
+    const per_genome: number[] = new Array(pgLen);
+    for (let j = 0; j < pgLen; j++) {
+      per_genome[j] = view.getUint32(pos, true);
+      pos += 4;
+    }
+
+    const pcLen = Number(view.getBigUint64(pos, true)); pos += 8;
+    const per_chromosome: ChromosomeCount[] = new Array(pcLen);
+    for (let j = 0; j < pcLen; j++) {
+      const genome_index = view.getUint32(pos, true); pos += 4;
+      const chromosome   = view.getUint8(pos);        pos += 1;
+      const count        = view.getUint32(pos, true); pos += 4;
+      per_chromosome[j] = { genome_index, chromosome, count };
+    }
+
+    const max_confidence = view.getFloat64(pos, true); pos += 8;
+
+    items[i] = {
+      qry_contig_id, total_occurrences, per_genome, per_chromosome, max_confidence,
+    };
+  }
+
+  return { total, items };
+}
+
+/**
+ * MatchesPage wire layout:
+ *   total u64, items Vec<MatchEntry>.
+ * MatchEntry:
+ *   qry_contig_id u32,
+ *   records Vec<MatchedRecordWire> (each: file_index u32, ref_contig_id u8,
+ *     qry_start_pos f64, qry_end_pos f64, ref_start_pos f64, ref_end_pos f64,
+ *     orientation char, confidence f64, ref_len f64),
+ *   total_record_count u32,
+ *   records_truncated bool (u8: 0 or 1).
+ */
+function decMatchesPage(bytes: Uint8Array): MatchesPage {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let pos = 0;
+
+  const total = Number(view.getBigUint64(pos, true)); pos += 8;
+  const itemsLen = Number(view.getBigUint64(pos, true)); pos += 8;
+
+  const items: MatchEntry[] = new Array(itemsLen);
+  for (let i = 0; i < itemsLen; i++) {
+    const qry_contig_id = view.getUint32(pos, true); pos += 4;
+
+    const recsLen = Number(view.getBigUint64(pos, true)); pos += 8;
+    const records: MatchedRecordWire[] = new Array(recsLen);
+    for (let j = 0; j < recsLen; j++) {
+      const file_index    = view.getUint32(pos, true); pos += 4;
+      const ref_contig_id = view.getUint8(pos);        pos += 1;
+      const qry_start_pos = view.getFloat64(pos, true); pos += 8;
+      const qry_end_pos   = view.getFloat64(pos, true); pos += 8;
+      const ref_start_pos = view.getFloat64(pos, true); pos += 8;
+      const ref_end_pos   = view.getFloat64(pos, true); pos += 8;
+      const orientation   = readChar(view, pos); pos += charLen(view.getUint8(pos));
+      const confidence    = view.getFloat64(pos, true); pos += 8;
+      const ref_len       = view.getFloat64(pos, true); pos += 8;
+      records[j] = {
+        file_index, ref_contig_id,
+        qry_start_pos, qry_end_pos, ref_start_pos, ref_end_pos,
+        orientation, confidence, ref_len,
+      };
+    }
+
+    const total_record_count = view.getUint32(pos, true); pos += 4;
+    const records_truncated = view.getUint8(pos) !== 0;  pos += 1;
+
+    items[i] = { qry_contig_id, records, total_record_count, records_truncated };
+  }
+
+  return { total, items };
 }
 
 export interface WireFlow {
@@ -281,7 +409,7 @@ export interface SeqLocationsResp {
   locations: SeqLocation[];
 }
 
-export function fetchSeqLocations(
+export async function fetchSeqLocations(
   sessId: string,
   opts: { qry: number; genomes?: number[]; signal?: AbortSignal },
 ): Promise<SeqLocationsResp | undefined> {
@@ -289,7 +417,31 @@ export function fetchSeqLocations(
     qry: opts.qry,
     genomes: opts.genomes && opts.genomes.length > 0 ? opts.genomes.join(',') : undefined,
   })}`;
-  return fetchJSON<SeqLocationsResp>(url, opts.signal);
+  const bytes = await fetchBincode(url, opts.signal);
+  return bytes ? decSeqLocations(bytes) : undefined;
+}
+
+/**
+ * Wire layout: qry_contig_id u32, locations Vec<SequenceLocation>
+ *   (each: genome_index u32, ref_contig_id u8, ref_start_pos f64, ref_end_pos f64).
+ */
+function decSeqLocations(bytes: Uint8Array): SeqLocationsResp {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let pos = 0;
+
+  const qry_contig_id = view.getUint32(pos, true); pos += 4;
+  const n = Number(view.getBigUint64(pos, true)); pos += 8;
+
+  const locations: SeqLocation[] = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const genome_index  = view.getUint32(pos, true); pos += 4;
+    const ref_contig_id = view.getUint8(pos);        pos += 1;
+    const ref_start_pos = view.getFloat64(pos, true); pos += 8;
+    const ref_end_pos   = view.getFloat64(pos, true); pos += 8;
+    locations[i] = { genome_index, ref_contig_id, ref_start_pos, ref_end_pos };
+  }
+
+  return { qry_contig_id, locations };
 }
 
 /**
