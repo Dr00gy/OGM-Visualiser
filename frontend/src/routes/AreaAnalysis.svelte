@@ -1058,6 +1058,7 @@
             on:dblclick={startEditWinPage}
             role="button"
             tabindex="0"
+            title="Double-click to jump to a window"
             on:keydown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 startEditWinPage();
@@ -1354,6 +1355,22 @@
     user-select: none;
     padding: 0.25rem 0.5rem;
     border-radius: 0.25rem;
+    transition: background 0.2s, box-shadow 0.2s, color 0.2s;
+    text-decoration: underline dotted;
+    text-decoration-color: var(--text-tertiary);
+    text-underline-offset: 3px;
+  }
+
+  .window-count:hover {
+    background: var(--bg-hover);
+    color: var(--accent-primary);
+    box-shadow: inset 0 0 0 1px var(--accent-primary);
+    text-decoration-color: var(--accent-primary);
+  }
+
+  .window-count:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 2px var(--accent-primary);
   }
 
   .window-page-input {

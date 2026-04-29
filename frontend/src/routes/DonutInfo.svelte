@@ -301,6 +301,7 @@
               on:dblclick={startEditOvPage}
               role="button"
               tabindex="0"
+              title="Double-click to jump to a page"
               on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') startEditOvPage(); }}
             >
               ({ovPage} / {totOvPages})
@@ -500,6 +501,7 @@
               on:dblclick={startEditMtcPage}
               role="button"
               tabindex="0"
+              title="Double-click to jump to a page"
               on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') startEditMtcPage(); }}
             >
               ({mtcPage} / {totMtcPages})
@@ -701,12 +703,23 @@
     color: var(--text-primary);
     cursor: pointer;
     user-select: none;
-    transition: background 0.2s;
+    transition: background 0.2s, box-shadow 0.2s, color 0.2s;
     border-radius: 0.375rem;
+    text-decoration: underline dotted;
+    text-decoration-color: var(--text-tertiary);
+    text-underline-offset: 3px;
   }
 
   .page-info:hover {
     background: var(--bg-hover);
+    color: var(--accent-primary);
+    box-shadow: inset 0 0 0 1px var(--accent-primary);
+    text-decoration-color: var(--accent-primary);
+  }
+
+  .page-info:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 2px var(--accent-primary);
   }
 
   .page-input {
